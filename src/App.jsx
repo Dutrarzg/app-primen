@@ -20,12 +20,21 @@ const gradeSabado = {
 };
 
 const OURO = '#C9A227';
+const WHATSAPP_BARBEARIA = '5532984079998'; // (32) 98407-9998 no formato internacional
 
 function dataParaISO(data) {
   const ano = data.getFullYear();
   const mes = String(data.getMonth() + 1).padStart(2, '0');
   const dia = String(data.getDate()).padStart(2, '0');
   return `${ano}-${mes}-${dia}`;
+}
+
+// Formata o telefone enquanto digita: (32) 98407-9998
+function formatarTelefone(valor) {
+  const nums = valor.replace(/\D/g, '').slice(0, 11); // só números, máximo 11
+  if (nums.length <= 2) return nums.length ? `(${nums}` : '';
+  if (nums.length <= 7) return `(${nums.slice(0, 2)}) ${nums.slice(2)}`;
+  return `(${nums.slice(0, 2)}) ${nums.slice(2, 7)}-${nums.slice(7)}`;
 }
 
 function App() {
@@ -72,7 +81,6 @@ function App() {
   const [bloqueioBarbeiro, setBloqueioBarbeiro] = useState('todos');
   const [bloqueioMotivo, setBloqueioMotivo] = useState('');
 
-  // Segurança: se o vídeo não disparar o "onEnded", fecha a abertura em 6s
   useEffect(() => {
     const timer = setTimeout(() => setMostrarAbertura(false), 6000);
     return () => clearTimeout(timer);
@@ -146,6 +154,14 @@ function App() {
     setDataEscolhida(null); setHorarioEscolhido(null); setPeriodoEscolhido(0);
     setHorariosOcupados([]); setNomeCliente(''); setTelefoneCliente(''); setErroSalvar('');
     setDiaFechadoCliente(false);
+  }
+
+  // Monta a mensagem e abre o WhatsApp da barbearia
+  function abrirWhatsApp() {
+    const dataTexto = dataEscolhida?.toLocaleDateString('pt-BR');
+    const msg = `Olá! Acabei de agendar pelo app:%0A%0A*${servicoEscolhido?.nome}*%0Acom ${barbeiroEscolhido?.nome}%0A${dataTexto} às ${horarioEscolhido}%0A%0AMeu nome: ${nomeCliente}%0AConfirmo minha presença!`;
+    const url = `https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`;
+    window.open(url, '_blank');
   }
 
   async function entrarComoDono() {
@@ -363,7 +379,7 @@ function App() {
                     <div style={estilos.label}>Nome</div>
                     <input style={estilos.input} value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} placeholder="Seu nome" />
                     <div style={estilos.label}>WhatsApp</div>
-                    <input style={estilos.input} value={telefoneCliente} onChange={(e) => setTelefoneCliente(e.target.value)} placeholder="(32) 9 9999-9999" />
+                    <input style={estilos.input} value={telefoneCliente} onChange={(e) => setTelefoneCliente(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
                     <div style={{ border: '1px solid #262626', borderRadius: '8px', padding: '14px', marginTop: '8px', fontSize: '13px', color: '#a3a3a3' }}>
                       <p style={{ margin: 0, color: '#f2f2f2', fontWeight: 500 }}>Resumo</p>
                       <p style={{ margin: '8px 0 0' }}>{servicoEscolhido?.nome}</p>
@@ -379,8 +395,12 @@ function App() {
                   <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '28px 20px' }}>
                     <div style={{ fontSize: '32px', color: OURO }}>✓</div>
                     <p style={{ fontWeight: 500, fontSize: '16px', margin: '10px 0 4px' }}>Horário reservado!</p>
-                    <p style={{ fontSize: '13px', color: '#a3a3a3', margin: 0 }}>{servicoEscolhido?.nome} · {dataEscolhida?.toLocaleDateString('pt-BR')} às {horarioEscolhido}</p>
-                    <button onClick={recomecar} style={estilos.botao(true)}>Fazer novo agendamento</button>
+                    <p style={{ fontSize: '13px', color: '#a3a3a3', margin: '0 0 4px' }}>{servicoEscolhido?.nome} · {dataEscolhida?.toLocaleDateString('pt-BR')} às {horarioEscolhido}</p>
+                    <p style={{ fontSize: '12px', color: '#7a7a7a', margin: 0 }}>com {barbeiroEscolhido?.nome}</p>
+                    <button onClick={abrirWhatsApp} style={{ width: '100%', marginTop: '18px', padding: '12px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>
+                      Falar com a barbearia
+                    </button>
+                    <button onClick={recomecar} style={{ width: '100%', marginTop: '10px', padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }}>Fazer novo agendamento</button>
                   </div>
                 )}
               </>
@@ -448,7 +468,7 @@ function App() {
                     <div style={estilos.label}>Nome do cliente</div>
                     <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
                     <div style={estilos.label}>WhatsApp (opcional)</div>
-                    <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(e.target.value)} placeholder="(32) 9 9999-9999" />
+                    <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
                     <div style={estilos.label}>Serviço</div>
                     <select style={estilos.input} value={manualServico} onChange={(e) => setManualServico(e.target.value)}>
                       <option value="">Escolha</option>
