@@ -234,7 +234,7 @@ function App() {
             muted
             playsInline
             onEnded={() => setMostrarAbertura(false)}
-            style={{ maxWidth: '80%', maxHeight: '80%' }}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
         </div>
       )}
