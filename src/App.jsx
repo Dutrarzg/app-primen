@@ -19,33 +19,32 @@ const gradeSabado = {
   nomes: ['Manhã', 'Tarde'],
 };
 
+// Gera horários de HH:MM em HH:MM de 15 em 15 minutos (inclusive o fim)
+function gerarHorarios(inicioH, inicioM, fimH, fimM) {
+  const lista = [];
+  let h = inicioH, m = inicioM;
+  while (h < fimH || (h === fimH && m <= fimM)) {
+    lista.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    m += 15;
+    if (m >= 60) { m = 0; h += 1; }
+  }
+  return lista;
+}
+
+// Grades de SEGUNDA por barbeiro (chave = nome exato no banco)
+const gradeSegundaPorBarbeiro = {
+  'Luiz Guilherme': { periodos: [gerarHorarios(15, 0, 18, 0)], nomes: ['Tarde'] },
+  'Rennan Martins': { periodos: [gerarHorarios(12, 0, 20, 0)], nomes: ['Dia todo'] },
+};
+
 const OURO = '#C9A227';
 const WHATSAPP_BARBEARIA = '5532984079998';
 
 const CLUB = {
   chamada: 'Primeira barbearia por assinatura em São Geraldo!',
   planos: [
-    {
-      id: 'corte',
-      nome: 'Corte Club',
-      preco: '99,99',
-      vantagens: [
-        'Acesso à agenda mensal de seg a qui',
-        'Corte ilimitado',
-        'Desconto de 10% em produtos',
-      ],
-    },
-    {
-      id: 'corte_barba',
-      nome: 'Corte e Barba Club',
-      preco: '149,99',
-      vantagens: [
-        'Acesso à agenda mensal de seg a qui',
-        'Corte ilimitado',
-        'Barba ilimitada',
-        'Desconto de 10% em produtos',
-      ],
-    },
+    { id: 'corte', nome: 'Corte Club', preco: '99,99', vantagens: ['Acesso à agenda mensal de seg a qui', 'Corte ilimitado', 'Desconto de 10% em produtos'] },
+    { id: 'corte_barba', nome: 'Corte e Barba Club', preco: '149,99', vantagens: ['Acesso à agenda mensal de seg a qui', 'Corte ilimitado', 'Barba ilimitada', 'Desconto de 10% em produtos'] },
   ],
   dias: ['SEG', 'TER', 'QUA', 'QUI'],
 };
@@ -62,6 +61,18 @@ function formatarTelefone(valor) {
   if (nums.length <= 2) return nums.length ? `(${nums}` : '';
   if (nums.length <= 7) return `(${nums.slice(0, 2)}) ${nums.slice(2)}`;
   return `(${nums.slice(0, 2)}) ${nums.slice(2, 7)}-${nums.slice(7)}`;
+}
+
+function AvatarBarbeiro({ barbeiro, tamanho = 34 }) {
+  const iniciais = barbeiro.nome.split(' ').map(w => w[0]).slice(0, 2).join('');
+  if (barbeiro.foto_url) {
+    return (<img src={barbeiro.foto_url} alt={barbeiro.nome} style={{ width: tamanho, height: tamanho, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }} />);
+  }
+  return (
+    <div style={{ width: tamanho, height: tamanho, borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 600, fontSize: tamanho * 0.4, flexShrink: 0 }}>
+      {iniciais}
+    </div>
+  );
 }
 
 function App() {
@@ -140,7 +151,21 @@ function App() {
 
   const servicosAgendaveis = servicos.filter((s) => !s.nome.toLowerCase().includes('club'));
 
-  function gradeDoDia(data) { return data.getDay() === 6 ? gradeSabado : gradeSemana; }
+  // Decide a grade: segunda depende do barbeiro; sábado tem grade própria; resto usa semana.
+  // Retorna null se for segunda com "sem preferência" (precisa escolher barbeiro),
+  // ou se o barbeiro não atende na segunda.
+  function gradeDoDia(data) {
+    const dow = data.getDay();
+    if (dow === 6) return gradeSabado;
+    if (dow === 1) {
+      // Segunda
+      if (!barbeiroEscolhido || barbeiroEscolhido.semPref) return { precisaBarbeiro: true };
+      const g = gradeSegundaPorBarbeiro[barbeiroEscolhido.nome];
+      return g || { naoAtende: true };
+    }
+    return gradeSemana;
+  }
+
   function diasDoMes() {
     const ano = mesAtual.getFullYear(), mes = mesAtual.getMonth();
     const primeiroDia = new Date(ano, mes, 1).getDay();
@@ -420,11 +445,9 @@ function App() {
                   </>
                 )}
 
-                {/* ===== LANDING DO CLUB PRIMEN ===== */}
                 {tela === 'club' && (
                   <>
                     <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
-
                     <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '16px', padding: '28px 20px', background: 'linear-gradient(180deg, rgba(201,162,39,0.10), rgba(201,162,39,0.02))', marginBottom: '18px' }}>
                       <div style={{ fontSize: '44px', lineHeight: 1 }}>👑</div>
                       <p style={{ fontSize: '22px', fontWeight: 700, color: OURO, margin: '8px 0 2px', letterSpacing: '0.5px' }}>CLUB PRIMEN</p>
@@ -435,9 +458,7 @@ function App() {
                       <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '18px' }}>
                         <p style={{ fontSize: '15px', color: '#f2f2f2', margin: 0 }}>Você já é membro! 🎉</p>
                         <p style={{ fontSize: '12px', color: '#C9A227', margin: '8px 0 0' }}>{clienteLogado.club_plano}</p>
-                        <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '4px 0 0' }}>
-                          com {barbeiros.find((b) => b.id === clienteLogado.club_barbeiro_id)?.nome || 'seu barbeiro'}
-                        </p>
+                        <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '4px 0 0' }}>com {barbeiros.find((b) => b.id === clienteLogado.club_barbeiro_id)?.nome || 'seu barbeiro'}</p>
                       </div>
                     ) : (
                       <>
@@ -464,9 +485,7 @@ function App() {
                               return (
                                 <div key={b.id} onClick={() => { if (!esgotado) setClubBarbeiro(b); }}
                                   style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: esgotado ? 'default' : 'pointer', opacity: esgotado ? 0.5 : 1 }}>
-                                  <div style={{ width: '38px', height: '38px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 600, fontSize: '14px', flexShrink: 0 }}>
-                                    {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
-                                  </div>
+                                  <AvatarBarbeiro barbeiro={b} tamanho={38} />
                                   <div style={{ flex: 1 }}>
                                     <p style={{ margin: 0, fontSize: '14px' }}>{b.nome}</p>
                                     <p style={{ margin: '2px 0 0', fontSize: '11px', color: esgotado ? '#e07a7a' : '#8a8a8a' }}>
@@ -508,7 +527,6 @@ function App() {
                   </>
                 )}
 
-                {/* ===== AGENDAMENTO ===== */}
                 {tela === 'agendar' && (
                   <>
                     {etapa === 'servico' && (
@@ -535,16 +553,17 @@ function App() {
                         <div onClick={() => setBarbeiroEscolhido({ id: null, nome: 'Sem preferência', semPref: true })}
                           style={{ display: 'flex', alignItems: 'center', gap: '10px', border: barbeiroEscolhido?.semPref ? '1px solid #C9A227' : '1px solid #333', background: barbeiroEscolhido?.semPref ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
                           <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#1f1f1f', border: '1px solid #444' }}></div>
-                          <p style={{ margin: 0 }}>Sem preferência</p>
+                          <div>
+                            <p style={{ margin: 0 }}>Sem preferência</p>
+                            <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#7a7a7a' }}>Exceto segunda-feira</p>
+                          </div>
                         </div>
                         {barbeiros.map((b) => {
                           const sel = barbeiroEscolhido?.id === b.id && !barbeiroEscolhido?.semPref;
                           return (
                             <div key={b.id} onClick={() => setBarbeiroEscolhido(b)}
                               style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
-                              <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 500, fontSize: '13px' }}>
-                                {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
-                              </div>
+                              <AvatarBarbeiro barbeiro={b} tamanho={34} />
                               <div>
                                 <p style={{ margin: 0 }}>{b.nome}</p>
                                 <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
@@ -585,35 +604,52 @@ function App() {
                             Agenda fechada nesse dia. Escolha outra data.
                           </div>
                         )}
-                        {dataEscolhida && !diaFechadoCliente && (
-                          <>
-                            <p style={estilos.titulo}>HORÁRIO · <span style={{ color: OURO, textTransform: 'capitalize' }}>{dataEscolhida.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}</span></p>
-                            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                              {gradeDoDia(dataEscolhida).nomes.map((nome, i) => {
-                                const ativo = periodoEscolhido === i;
-                                return (
-                                  <div key={i} onClick={() => { setPeriodoEscolhido(i); setHorarioEscolhido(null); }}
-                                    style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '8px', fontSize: '11px', cursor: 'pointer', border: ativo ? '1px solid #C9A227' : '1px solid #333', background: ativo ? 'rgba(201,162,39,0.08)' : 'transparent' }}>
-                                    {nome} <span style={{ color: '#7a7a7a' }}>({gradeDoDia(dataEscolhida).periodos[i].length})</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '14px' }}>
-                              {gradeDoDia(dataEscolhida).periodos[periodoEscolhido].map((h) => {
-                                const ocupado = horariosOcupados.includes(h);
-                                const sel = horarioEscolhido === h;
-                                if (ocupado) return (<div key={h} style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', color: '#4a4a4a', border: '1px solid #1f1f1f', textDecoration: 'line-through', cursor: 'default' }}>{h}</div>);
-                                return (
-                                  <div key={h} onClick={() => setHorarioEscolhido(h)}
-                                    style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', cursor: 'pointer', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent' }}>{h}</div>
-                                );
-                              })}
-                            </div>
-                            <button disabled={!horarioEscolhido} onClick={confirmarAgendamento} style={estilos.botao(!!horarioEscolhido && !salvando)}>{salvando ? 'Salvando...' : 'Confirmar agendamento'}</button>
-                            {erroSalvar && <p style={{ color: '#e07a7a', fontSize: '12px', marginTop: '10px' }}>{erroSalvar}</p>}
-                          </>
-                        )}
+                        {dataEscolhida && !diaFechadoCliente && (() => {
+                          const grade = gradeDoDia(dataEscolhida);
+                          if (grade.precisaBarbeiro) {
+                            return (
+                              <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '8px', padding: '16px', color: '#d6d6d6', fontSize: '13px' }}>
+                                Na segunda-feira, cada barbeiro tem horário próprio.<br />Volte e escolha um barbeiro específico.
+                              </div>
+                            );
+                          }
+                          if (grade.naoAtende) {
+                            return (
+                              <div style={{ textAlign: 'center', border: '1px dashed #444', borderRadius: '8px', padding: '16px', color: '#8a8a8a', fontSize: '13px' }}>
+                                {barbeiroEscolhido?.nome} não atende na segunda-feira. Escolha outra data.
+                              </div>
+                            );
+                          }
+                          return (
+                            <>
+                              <p style={estilos.titulo}>HORÁRIO · <span style={{ color: OURO, textTransform: 'capitalize' }}>{dataEscolhida.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}</span></p>
+                              <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                                {grade.nomes.map((nome, i) => {
+                                  const ativo = periodoEscolhido === i;
+                                  return (
+                                    <div key={i} onClick={() => { setPeriodoEscolhido(i); setHorarioEscolhido(null); }}
+                                      style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '8px', fontSize: '11px', cursor: 'pointer', border: ativo ? '1px solid #C9A227' : '1px solid #333', background: ativo ? 'rgba(201,162,39,0.08)' : 'transparent' }}>
+                                      {nome} <span style={{ color: '#7a7a7a' }}>({grade.periodos[i].length})</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '14px' }}>
+                                {grade.periodos[periodoEscolhido].map((h) => {
+                                  const ocupado = horariosOcupados.includes(h);
+                                  const sel = horarioEscolhido === h;
+                                  if (ocupado) return (<div key={h} style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', color: '#4a4a4a', border: '1px solid #1f1f1f', textDecoration: 'line-through', cursor: 'default' }}>{h}</div>);
+                                  return (
+                                    <div key={h} onClick={() => setHorarioEscolhido(h)}
+                                      style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', cursor: 'pointer', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent' }}>{h}</div>
+                                  );
+                                })}
+                              </div>
+                              <button disabled={!horarioEscolhido} onClick={confirmarAgendamento} style={estilos.botao(!!horarioEscolhido && !salvando)}>{salvando ? 'Salvando...' : 'Confirmar agendamento'}</button>
+                              {erroSalvar && <p style={{ color: '#e07a7a', fontSize: '12px', marginTop: '10px' }}>{erroSalvar}</p>}
+                            </>
+                          );
+                        })()}
                       </>
                     )}
 
@@ -733,7 +769,6 @@ function App() {
                   ))
                 )}
 
-                {/* ===== MEMBROS DO CLUB ===== */}
                 <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
                   {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
                 </button>
