@@ -22,16 +22,30 @@ const gradeSabado = {
 const OURO = '#C9A227';
 const WHATSAPP_BARBEARIA = '5532984079998';
 
-// ===== DADOS DO CLUB PRIMEN (troque os valores quando o dono confirmar) =====
 const CLUB = {
-  preco: '99,90',              // <-- troque pelo valor real do plano
-  periodo: '/mês',
-  chamada: 'Faça parte do time. Visual sempre em dia.',
-  vantagens: [
-    'Corte sempre em dia de segunda a quinta',
-    'Preço fixo mensal, sem surpresa',
-    'Atendimento prioritário',
-    'Vantagens exclusivas de membro',
+  chamada: 'Primeira barbearia por assinatura em São Geraldo!',
+  planos: [
+    {
+      id: 'corte',
+      nome: 'Corte Club',
+      preco: '99,99',
+      vantagens: [
+        'Acesso à agenda mensal de seg a qui',
+        'Corte ilimitado',
+        'Desconto de 10% em produtos',
+      ],
+    },
+    {
+      id: 'corte_barba',
+      nome: 'Corte e Barba Club',
+      preco: '149,99',
+      vantagens: [
+        'Acesso à agenda mensal de seg a qui',
+        'Corte ilimitado',
+        'Barba ilimitada',
+        'Desconto de 10% em produtos',
+      ],
+    },
   ],
   dias: ['SEG', 'TER', 'QUA', 'QUI'],
 };
@@ -54,7 +68,7 @@ function App() {
   const [modo, setModo] = useState('cliente');
   const [mostrarAbertura, setMostrarAbertura] = useState(true);
 
-  const [tela, setTela] = useState('login'); // login | cadastro | menu | agendar | club
+  const [tela, setTela] = useState('login');
   const [clienteLogado, setClienteLogado] = useState(null);
   const [loginTel, setLoginTel] = useState('');
   const [loginSenha, setLoginSenha] = useState('');
@@ -80,12 +94,19 @@ function App() {
   const [salvando, setSalvando] = useState(false);
   const [erroSalvar, setErroSalvar] = useState('');
 
+  const [clubPlano, setClubPlano] = useState(null);
+  const [clubBarbeiro, setClubBarbeiro] = useState(null);
+  const [vagasUsadas, setVagasUsadas] = useState({});
+  const [processandoClub, setProcessandoClub] = useState(false);
+
   const [senhaDigitada, setSenhaDigitada] = useState('');
   const [erroSenha, setErroSenha] = useState('');
   const [dataDono, setDataDono] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()));
   const [agendaDoDia, setAgendaDoDia] = useState([]);
   const [bloqueiosDoDia, setBloqueiosDoDia] = useState([]);
   const [carregandoAgenda, setCarregandoAgenda] = useState(false);
+  const [membrosClub, setMembrosClub] = useState([]);
+  const [mostrarMembros, setMostrarMembros] = useState(false);
 
   const [mostrarFormManual, setMostrarFormManual] = useState(false);
   const [manualNome, setManualNome] = useState('');
@@ -117,10 +138,7 @@ function App() {
     if (telSalvo) setLoginTel(telSalvo);
   }, []);
 
-  // Esconde o "Club Primen" da lista de serviços do agendamento
-  const servicosAgendaveis = servicos.filter(
-    (s) => !s.nome.toLowerCase().includes('club')
-  );
+  const servicosAgendaveis = servicos.filter((s) => !s.nome.toLowerCase().includes('club'));
 
   function gradeDoDia(data) { return data.getDay() === 6 ? gradeSabado : gradeSemana; }
   function diasDoMes() {
@@ -170,10 +188,31 @@ function App() {
     setTela('login');
   }
 
-  async function entrarNoClub() {
-    if (!clienteLogado) return;
-    await supabase.from('clientes').update({ membro_club: true }).eq('id', clienteLogado.id);
-    setClienteLogado({ ...clienteLogado, membro_club: true });
+  async function abrirClub() {
+    setClubPlano(null);
+    setClubBarbeiro(null);
+    setTela('club');
+    const { data: membros } = await supabase.from('clientes').select('club_barbeiro_id').eq('membro_club', true);
+    const contagem = {};
+    (membros || []).forEach((m) => {
+      if (m.club_barbeiro_id) contagem[m.club_barbeiro_id] = (contagem[m.club_barbeiro_id] || 0) + 1;
+    });
+    setVagasUsadas(contagem);
+  }
+
+  async function confirmarAssinaturaClub() {
+    if (!clubPlano || !clubBarbeiro) return;
+    setProcessandoClub(true);
+    const planoNome = CLUB.planos.find((p) => p.id === clubPlano)?.nome;
+    await supabase.from('clientes').update({
+      membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id,
+    }).eq('id', clienteLogado.id);
+    setProcessandoClub(false);
+    setClienteLogado({ ...clienteLogado, membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id });
+  }
+
+  function whatsClub() {
+    window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=Ol%C3%A1! Tenho interesse no Club Primen. Pode me passar os detalhes?`, '_blank');
   }
 
   async function escolherData(data) {
@@ -220,10 +259,6 @@ function App() {
     window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
   }
 
-  function whatsClub() {
-    window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=Ol%C3%A1! Tenho interesse no Club Primen. Pode me passar os detalhes?`, '_blank');
-  }
-
   async function entrarComoDono() {
     setErroSenha('');
     const { data } = await supabase.from('config').select('valor').eq('chave', 'senha_dono').single();
@@ -246,6 +281,22 @@ function App() {
     setAgendaDoDia(ags || []);
     setBloqueiosDoDia(bloqs || []);
     setCarregandoAgenda(false);
+  }
+
+  async function carregarMembros() {
+    const { data } = await supabase
+      .from('clientes')
+      .select('id, nome, telefone, club_plano, club_barbeiro_id')
+      .eq('membro_club', true)
+      .order('nome', { ascending: true });
+    setMembrosClub(data || []);
+  }
+
+  async function removerMembro(id) {
+    await supabase.from('clientes')
+      .update({ membro_club: false, club_plano: null, club_barbeiro_id: null })
+      .eq('id', id);
+    carregarMembros();
   }
 
   function mudarDiaDono(delta) {
@@ -360,7 +411,7 @@ function App() {
                       <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>Escolha serviço, profissional e horário</p>
                     </div>
 
-                    <div onClick={() => setTela('club')}
+                    <div onClick={abrirClub}
                       style={{ border: '1px solid #333', borderRadius: '12px', padding: '24px', cursor: 'pointer', textAlign: 'center' }}>
                       <div style={{ fontSize: '30px', marginBottom: '6px' }}>👑</div>
                       <p style={{ margin: 0, fontWeight: 500, fontSize: '16px' }}>Club Primen</p>
@@ -374,7 +425,6 @@ function App() {
                   <>
                     <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
 
-                    {/* Hero */}
                     <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '16px', padding: '28px 20px', background: 'linear-gradient(180deg, rgba(201,162,39,0.10), rgba(201,162,39,0.02))', marginBottom: '18px' }}>
                       <div style={{ fontSize: '44px', lineHeight: 1 }}>👑</div>
                       <p style={{ fontSize: '22px', fontWeight: 700, color: OURO, margin: '8px 0 2px', letterSpacing: '0.5px' }}>CLUB PRIMEN</p>
@@ -384,55 +434,74 @@ function App() {
                     {clienteLogado?.membro_club ? (
                       <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '18px' }}>
                         <p style={{ fontSize: '15px', color: '#f2f2f2', margin: 0 }}>Você já é membro! 🎉</p>
-                        <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '8px 0 0' }}>Aproveite suas vantagens de segunda a quinta.</p>
+                        <p style={{ fontSize: '12px', color: '#C9A227', margin: '8px 0 0' }}>{clienteLogado.club_plano}</p>
+                        <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '4px 0 0' }}>
+                          com {barbeiros.find((b) => b.id === clienteLogado.club_barbeiro_id)?.nome || 'seu barbeiro'}
+                        </p>
                       </div>
                     ) : (
                       <>
-                        {/* Card de preço */}
-                        <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '20px', marginBottom: '18px', background: '#111' }}>
-                          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0, letterSpacing: '1px' }}>ASSINATURA MENSAL</p>
-                          <p style={{ margin: '8px 0 0' }}>
-                            <span style={{ fontSize: '16px', color: OURO, verticalAlign: 'top' }}>R$ </span>
-                            <span style={{ fontSize: '40px', fontWeight: 700, color: OURO }}>{CLUB.preco}</span>
-                            <span style={{ fontSize: '14px', color: '#8a8a8a' }}>{CLUB.periodo}</span>
-                          </p>
-                        </div>
-
-                        {/* Vantagens */}
-                        <p style={estilos.titulo}>O QUE VOCÊ GANHA</p>
-                        <div style={{ marginBottom: '18px' }}>
-                          {CLUB.vantagens.map((v, i) => (
-                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-                              <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(201,162,39,0.15)', color: OURO, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', flexShrink: 0 }}>✓</span>
-                              <span style={{ fontSize: '13px', color: '#e6e6e6' }}>{v}</span>
+                        <p style={estilos.titulo}>ESCOLHA SEU PLANO</p>
+                        {CLUB.planos.map((p) => {
+                          const sel = clubPlano === p.id;
+                          return (
+                            <div key={p.id} onClick={() => setClubPlano(p.id)}
+                              style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: sel ? '1px solid #C9A227' : '1px solid #262626', background: sel ? 'rgba(201,162,39,0.08)' : '#111', borderRadius: '12px', padding: '16px', marginBottom: '10px', cursor: 'pointer' }}>
+                              <span style={{ fontSize: '14px', fontWeight: 500 }}>{p.nome}</span>
+                              <span><span style={{ fontSize: '12px', color: OURO }}>R$ </span><span style={{ fontSize: '20px', fontWeight: 700, color: OURO }}>{p.preco}</span><span style={{ fontSize: '11px', color: '#8a8a8a' }}>/mês</span></span>
                             </div>
-                          ))}
-                        </div>
+                          );
+                        })}
 
-                        {/* Dias do club */}
-                        <p style={estilos.titulo}>DIAS DO CLUB</p>
+                        {clubPlano && (
+                          <>
+                            <p style={{ ...estilos.titulo, marginTop: '18px' }}>ESCOLHA SEU BARBEIRO</p>
+                            {barbeiros.map((b) => {
+                              const usadas = vagasUsadas[b.id] || 0;
+                              const restantes = (b.vagas_club || 0) - usadas;
+                              const esgotado = restantes <= 0;
+                              const sel = clubBarbeiro?.id === b.id;
+                              return (
+                                <div key={b.id} onClick={() => { if (!esgotado) setClubBarbeiro(b); }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: esgotado ? 'default' : 'pointer', opacity: esgotado ? 0.5 : 1 }}>
+                                  <div style={{ width: '38px', height: '38px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 600, fontSize: '14px', flexShrink: 0 }}>
+                                    {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
+                                  </div>
+                                  <div style={{ flex: 1 }}>
+                                    <p style={{ margin: 0, fontSize: '14px' }}>{b.nome}</p>
+                                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: esgotado ? '#e07a7a' : '#8a8a8a' }}>
+                                      {esgotado ? 'Esgotado' : `${restantes} vaga${restantes > 1 ? 's' : ''} disponível${restantes > 1 ? 'is' : ''}`}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </>
+                        )}
+
+                        {clubPlano && (
+                          <>
+                            <p style={{ ...estilos.titulo, marginTop: '18px' }}>O QUE VOCÊ GANHA</p>
+                            <div style={{ marginBottom: '14px' }}>
+                              {CLUB.planos.find((p) => p.id === clubPlano)?.vantagens.map((v, i) => (
+                                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                                  <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(201,162,39,0.15)', color: OURO, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', flexShrink: 0 }}>✓</span>
+                                  <span style={{ fontSize: '13px', color: '#e6e6e6' }}>{v}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </>
+                        )}
+
                         <div style={{ display: 'flex', gap: '8px', marginBottom: '18px' }}>
                           {CLUB.dias.map((d) => (
                             <div key={d} style={{ flex: 1, textAlign: 'center', padding: '10px 0', borderRadius: '8px', border: '1px solid #C9A227', background: 'rgba(201,162,39,0.08)', color: OURO, fontSize: '12px', fontWeight: 600 }}>{d}</div>
                           ))}
                         </div>
 
-                        {/* Equipe */}
-                        <p style={estilos.titulo}>SUA EQUIPE</p>
-                        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-                          {barbeiros.map((b) => (
-                            <div key={b.id} style={{ flex: 1, textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '14px 8px' }}>
-                              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 600, fontSize: '16px', margin: '0 auto 8px' }}>
-                                {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
-                              </div>
-                              <p style={{ margin: 0, fontSize: '12px', fontWeight: 500 }}>{b.nome}</p>
-                              <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* CTA */}
-                        <button onClick={entrarNoClub} style={estilos.botao(true)}>Quero ser membro</button>
+                        <button onClick={confirmarAssinaturaClub} disabled={!clubPlano || !clubBarbeiro || processandoClub} style={estilos.botao(!!clubPlano && !!clubBarbeiro && !processandoClub)}>
+                          {processandoClub ? 'Confirmando...' : 'Quero ser membro'}
+                        </button>
                         <button onClick={whatsClub} style={{ width: '100%', marginTop: '10px', padding: '12px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>Tirar dúvidas no WhatsApp</button>
                       </>
                     )}
@@ -662,6 +731,41 @@ function App() {
                       {a.clientes?.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
                     </div>
                   ))
+                )}
+
+                {/* ===== MEMBROS DO CLUB ===== */}
+                <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
+                  {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
+                </button>
+
+                {mostrarMembros && (
+                  <div style={{ marginTop: '8px' }}>
+                    {membrosClub.length === 0 ? (
+                      <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+                        Nenhum membro no Club ainda.
+                      </div>
+                    ) : (
+                      <>
+                        <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>{membrosClub.length} membro(s)</p>
+                        {membrosClub.map((m) => (
+                          <div key={m.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div>
+                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>
+                                  {barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}
+                                </p>
+                                {m.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{m.telefone}</p>}
+                              </div>
+                              <span onClick={() => { if (confirm('Remover ' + m.nome + ' do Club?')) removerMembro(m.id); }}
+                                style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer', whiteSpace: 'nowrap' }}>remover</span>
+                            </div>
+                          </div>
+                        ))}
+                      </>
+                    )}
+                  </div>
                 )}
               </>
             )}
