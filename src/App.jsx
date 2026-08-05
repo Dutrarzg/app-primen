@@ -20,7 +20,21 @@ const gradeSabado = {
 };
 
 const OURO = '#C9A227';
-const WHATSAPP_BARBEARIA = '5532984079998'; // (32) 98407-9998 no formato internacional
+const WHATSAPP_BARBEARIA = '5532984079998';
+
+// ===== DADOS DO CLUB PRIMEN (troque os valores quando o dono confirmar) =====
+const CLUB = {
+  preco: '99,90',              // <-- troque pelo valor real do plano
+  periodo: '/mês',
+  chamada: 'Faça parte do time. Visual sempre em dia.',
+  vantagens: [
+    'Corte sempre em dia de segunda a quinta',
+    'Preço fixo mensal, sem surpresa',
+    'Atendimento prioritário',
+    'Vantagens exclusivas de membro',
+  ],
+  dias: ['SEG', 'TER', 'QUA', 'QUI'],
+};
 
 function dataParaISO(data) {
   const ano = data.getFullYear();
@@ -29,9 +43,8 @@ function dataParaISO(data) {
   return `${ano}-${mes}-${dia}`;
 }
 
-// Formata o telefone enquanto digita: (32) 98407-9998
 function formatarTelefone(valor) {
-  const nums = valor.replace(/\D/g, '').slice(0, 11); // só números, máximo 11
+  const nums = valor.replace(/\D/g, '').slice(0, 11);
   if (nums.length <= 2) return nums.length ? `(${nums}` : '';
   if (nums.length <= 7) return `(${nums.slice(0, 2)}) ${nums.slice(2)}`;
   return `(${nums.slice(0, 2)}) ${nums.slice(2, 7)}-${nums.slice(7)}`;
@@ -40,6 +53,14 @@ function formatarTelefone(valor) {
 function App() {
   const [modo, setModo] = useState('cliente');
   const [mostrarAbertura, setMostrarAbertura] = useState(true);
+
+  const [tela, setTela] = useState('login'); // login | cadastro | menu | agendar | club
+  const [clienteLogado, setClienteLogado] = useState(null);
+  const [loginTel, setLoginTel] = useState('');
+  const [loginSenha, setLoginSenha] = useState('');
+  const [cadastroNome, setCadastroNome] = useState('');
+  const [erroLogin, setErroLogin] = useState('');
+  const [processandoLogin, setProcessandoLogin] = useState(false);
 
   const [servicos, setServicos] = useState([]);
   const [barbeiros, setBarbeiros] = useState([]);
@@ -56,9 +77,6 @@ function App() {
   const [horarioEscolhido, setHorarioEscolhido] = useState(null);
   const [horariosOcupados, setHorariosOcupados] = useState([]);
   const [diaFechadoCliente, setDiaFechadoCliente] = useState(false);
-
-  const [nomeCliente, setNomeCliente] = useState('');
-  const [telefoneCliente, setTelefoneCliente] = useState('');
   const [salvando, setSalvando] = useState(false);
   const [erroSalvar, setErroSalvar] = useState('');
 
@@ -95,7 +113,14 @@ function App() {
       setCarregando(false);
     }
     buscarDados();
+    const telSalvo = localStorage.getItem('primen_tel');
+    if (telSalvo) setLoginTel(telSalvo);
   }, []);
+
+  // Esconde o "Club Primen" da lista de serviços do agendamento
+  const servicosAgendaveis = servicos.filter(
+    (s) => !s.nome.toLowerCase().includes('club')
+  );
 
   function gradeDoDia(data) { return data.getDay() === 6 ? gradeSabado : gradeSemana; }
   function diasDoMes() {
@@ -112,6 +137,45 @@ function App() {
     return data < zero;
   }
 
+  async function tentarEntrar() {
+    setErroLogin('');
+    if (!loginTel.trim() || !loginSenha.trim()) { setErroLogin('Preencha telefone e senha.'); return; }
+    setProcessandoLogin(true);
+    const { data: cliente } = await supabase.from('clientes').select('*').eq('telefone', loginTel.trim()).maybeSingle();
+    setProcessandoLogin(false);
+    if (!cliente) { setTela('cadastro'); return; }
+    if (cliente.senha !== loginSenha.trim()) { setErroLogin('Senha incorreta.'); return; }
+    localStorage.setItem('primen_tel', loginTel.trim());
+    setClienteLogado(cliente);
+    setTela('menu');
+  }
+
+  async function cadastrar() {
+    setErroLogin('');
+    if (!cadastroNome.trim()) { setErroLogin('Digite seu nome.'); return; }
+    setProcessandoLogin(true);
+    const { data: novo, error } = await supabase.from('clientes')
+      .insert({ nome: cadastroNome.trim(), telefone: loginTel.trim(), senha: loginSenha.trim() }).select().single();
+    setProcessandoLogin(false);
+    if (error) { setErroLogin('Erro ao cadastrar. Tente outro número.'); return; }
+    localStorage.setItem('primen_tel', loginTel.trim());
+    setClienteLogado(novo);
+    setCadastroNome('');
+    setTela('menu');
+  }
+
+  function sairDaConta() {
+    setClienteLogado(null);
+    setLoginSenha('');
+    setTela('login');
+  }
+
+  async function entrarNoClub() {
+    if (!clienteLogado) return;
+    await supabase.from('clientes').update({ membro_club: true }).eq('id', clienteLogado.id);
+    setClienteLogado({ ...clienteLogado, membro_club: true });
+  }
+
   async function escolherData(data) {
     setDataEscolhida(data);
     setPeriodoEscolhido(0);
@@ -119,7 +183,6 @@ function App() {
     setHorariosOcupados([]);
     setDiaFechadoCliente(false);
     const dataISO = dataParaISO(data);
-
     const { data: bloqueios } = await supabase.from('dias_bloqueados').select('barbeiro_id').eq('data', dataISO);
     if (bloqueios && bloqueios.length > 0) {
       const barbeiroId = barbeiroEscolhido && !barbeiroEscolhido.semPref ? barbeiroEscolhido.id : null;
@@ -127,7 +190,6 @@ function App() {
       const fechadoDele = barbeiroId && bloqueios.some((b) => b.barbeiro_id === barbeiroId);
       if (fechadoGeral || fechadoDele) { setDiaFechadoCliente(true); return; }
     }
-
     let query = supabase.from('agendamentos').select('horario, barbeiro_id').eq('data', dataISO).neq('status', 'cancelado');
     if (barbeiroEscolhido && !barbeiroEscolhido.semPref) query = query.eq('barbeiro_id', barbeiroEscolhido.id);
     const { data: ocupados } = await query;
@@ -136,12 +198,9 @@ function App() {
 
   async function confirmarAgendamento() {
     setErroSalvar('');
-    if (!nomeCliente.trim() || !telefoneCliente.trim()) { setErroSalvar('Preencha nome e WhatsApp.'); return; }
     setSalvando(true);
-    const { data: cliente, error: erroCliente } = await supabase.from('clientes').insert({ nome: nomeCliente.trim(), telefone: telefoneCliente.trim() }).select().single();
-    if (erroCliente) { setErroSalvar('Erro ao cadastrar cliente.'); setSalvando(false); return; }
     const { error: erroAg } = await supabase.from('agendamentos').insert({
-      cliente_id: cliente.id, barbeiro_id: barbeiroEscolhido?.id || null, servico_id: servicoEscolhido.id,
+      cliente_id: clienteLogado.id, barbeiro_id: barbeiroEscolhido?.id || null, servico_id: servicoEscolhido.id,
       data: dataParaISO(dataEscolhida), horario: horarioEscolhido, status: 'confirmado', origem: 'cliente',
     });
     setSalvando(false);
@@ -149,19 +208,20 @@ function App() {
     setEtapa('sucesso');
   }
 
-  function recomecar() {
+  function recomecarAgendamento() {
     setEtapa('servico'); setServicoEscolhido(null); setBarbeiroEscolhido(null);
     setDataEscolhida(null); setHorarioEscolhido(null); setPeriodoEscolhido(0);
-    setHorariosOcupados([]); setNomeCliente(''); setTelefoneCliente(''); setErroSalvar('');
-    setDiaFechadoCliente(false);
+    setHorariosOcupados([]); setErroSalvar(''); setDiaFechadoCliente(false);
   }
 
-  // Monta a mensagem e abre o WhatsApp da barbearia
   function abrirWhatsApp() {
     const dataTexto = dataEscolhida?.toLocaleDateString('pt-BR');
-    const msg = `Olá! Acabei de agendar pelo app:%0A%0A*${servicoEscolhido?.nome}*%0Acom ${barbeiroEscolhido?.nome}%0A${dataTexto} às ${horarioEscolhido}%0A%0AMeu nome: ${nomeCliente}%0AConfirmo minha presença!`;
-    const url = `https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`;
-    window.open(url, '_blank');
+    const msg = `Olá! Acabei de agendar pelo app:%0A%0A*${servicoEscolhido?.nome}*%0Acom ${barbeiroEscolhido?.nome}%0A${dataTexto} às ${horarioEscolhido}%0A%0AMeu nome: ${clienteLogado?.nome}%0AConfirmo minha presença!`;
+    window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
+  }
+
+  function whatsClub() {
+    window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=Ol%C3%A1! Tenho interesse no Club Primen. Pode me passar os detalhes?`, '_blank');
   }
 
   async function entrarComoDono() {
@@ -216,7 +276,7 @@ function App() {
       setErroManual('Preencha nome, serviço e horário.'); return;
     }
     const { data: cliente, error: erroCli } = await supabase.from('clientes')
-      .insert({ nome: manualNome.trim(), telefone: manualTel.trim() || 'não informado' }).select().single();
+      .insert({ nome: manualNome.trim(), telefone: manualTel.trim() || ('manual-' + Date.now()) }).select().single();
     if (erroCli) { setErroManual('Erro ao cadastrar cliente.'); return; }
     const { error: erroAg } = await supabase.from('agendamentos').insert({
       cliente_id: cliente.id, barbeiro_id: manualBarbeiro || null, servico_id: manualServico,
@@ -244,14 +304,7 @@ function App() {
     <>
       {mostrarAbertura && (
         <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', background: '#0d0d0d', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <video
-            src={videoAbertura}
-            autoPlay
-            muted
-            playsInline
-            onEnded={() => setMostrarAbertura(false)}
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-          />
+          <video src={videoAbertura} autoPlay muted playsInline onEnded={() => setMostrarAbertura(false)} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         </div>
       )}
 
@@ -267,141 +320,245 @@ function App() {
 
             {modo === 'cliente' && (
               <>
-                {etapa === 'servico' && (
+                {tela === 'login' && (
                   <>
-                    <p style={estilos.titulo}>ESCOLHA O SERVIÇO</p>
-                    {servicos.map((s) => (
-                      <div key={s.id} onClick={() => { setServicoEscolhido(s); setEtapa('equipe'); }}
-                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px', cursor: 'pointer' }}>
-                        <div>
-                          <p style={{ margin: 0, fontWeight: 500 }}>{s.nome}</p>
-                          <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#7a7a7a' }}>{s.duracao_min} min</p>
-                        </div>
-                        <p style={{ margin: 0, color: OURO, fontWeight: 500 }}>R$ {Number(s.preco).toFixed(2).replace('.', ',')}</p>
-                      </div>
-                    ))}
+                    <p style={estilos.titulo}>ENTRAR</p>
+                    <div style={estilos.label}>Celular</div>
+                    <input style={estilos.input} value={loginTel} onChange={(e) => setLoginTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+                    <div style={estilos.label}>Senha</div>
+                    <input style={estilos.input} type="password" value={loginSenha} onChange={(e) => setLoginSenha(e.target.value)} placeholder="Sua senha" />
+                    {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
+                    <button onClick={tentarEntrar} disabled={processandoLogin} style={estilos.botao(!processandoLogin)}>{processandoLogin ? 'Entrando...' : 'Entrar'}</button>
+                    <p style={{ fontSize: '11px', color: '#6b6b6b', textAlign: 'center', marginTop: '14px' }}>Primeira vez? É só digitar seu celular e uma senha nova que criamos sua conta.</p>
                     <p style={estilos.link} onClick={() => setModo('login-dono')}>Acesso do dono</p>
                   </>
                 )}
 
-                {etapa === 'equipe' && (
+                {tela === 'cadastro' && (
                   <>
-                    <div style={estilos.voltar} onClick={() => setEtapa('servico')}>← {servicoEscolhido?.nome}</div>
-                    <p style={estilos.titulo}>EQUIPE DISPONÍVEL</p>
-                    <div onClick={() => setBarbeiroEscolhido({ id: null, nome: 'Sem preferência', semPref: true })}
-                      style={{ display: 'flex', alignItems: 'center', gap: '10px', border: barbeiroEscolhido?.semPref ? '1px solid #C9A227' : '1px solid #333', background: barbeiroEscolhido?.semPref ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
-                      <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#1f1f1f', border: '1px solid #444' }}></div>
-                      <p style={{ margin: 0 }}>Sem preferência</p>
-                    </div>
-                    {barbeiros.map((b) => {
-                      const sel = barbeiroEscolhido?.id === b.id && !barbeiroEscolhido?.semPref;
-                      return (
-                        <div key={b.id} onClick={() => setBarbeiroEscolhido(b)}
-                          style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
-                          <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 500, fontSize: '13px' }}>
-                            {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
-                          </div>
-                          <div>
-                            <p style={{ margin: 0 }}>{b.nome}</p>
-                            <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <button disabled={!barbeiroEscolhido} onClick={() => setEtapa('dataHora')} style={estilos.botao(!!barbeiroEscolhido)}>Continuar</button>
+                    <div style={estilos.voltar} onClick={() => setTela('login')}>← Voltar</div>
+                    <p style={estilos.titulo}>CRIAR CONTA</p>
+                    <p style={{ fontSize: '13px', color: '#a3a3a3', marginBottom: '14px' }}>Esse número ainda não tem conta. Como é seu nome?</p>
+                    <div style={estilos.label}>Nome</div>
+                    <input style={estilos.input} value={cadastroNome} onChange={(e) => setCadastroNome(e.target.value)} placeholder="Seu nome" />
+                    {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
+                    <button onClick={cadastrar} disabled={processandoLogin} style={estilos.botao(!processandoLogin)}>{processandoLogin ? 'Criando...' : 'Criar conta e entrar'}</button>
                   </>
                 )}
 
-                {etapa === 'dataHora' && (
+                {tela === 'menu' && (
                   <>
-                    <div style={estilos.voltar} onClick={() => setEtapa('equipe')}>← {servicoEscolhido?.nome} · {barbeiroEscolhido?.nome}</div>
-                    <p style={estilos.titulo}>ESCOLHA A DATA</p>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                      <span style={{ fontSize: '13px', textTransform: 'capitalize' }}>{mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</span>
-                      <span style={{ fontSize: '10px', color: '#6b6b6b' }}>dom fechado</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                      <span style={{ fontSize: '13px', color: '#f2f2f2' }}>Olá, {clienteLogado?.nome?.split(' ')[0]} 👋</span>
+                      <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={sairDaConta}>Sair</span>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '6px' }}>
-                      {['D','S','T','Q','Q','S','S'].map((d, i) => (<div key={i} style={{ textAlign: 'center', fontSize: '10px', color: '#6b6b6b' }}>{d}</div>))}
+
+                    <div onClick={() => { recomecarAgendamento(); setTela('agendar'); }}
+                      style={{ border: '1px solid #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '14px', cursor: 'pointer', textAlign: 'center', background: 'rgba(201,162,39,0.05)' }}>
+                      <div style={{ fontSize: '30px', marginBottom: '6px' }}>✂️</div>
+                      <p style={{ margin: 0, fontWeight: 500, fontSize: '16px', color: OURO }}>Agendar horário</p>
+                      <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>Escolha serviço, profissional e horário</p>
                     </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '16px' }}>
-                      {diasDoMes().map((data, i) => {
-                        if (!data) return <div key={i}></div>;
-                        const bloqueado = data.getDay() === 0 || ehPassado(data);
-                        const selecionada = dataEscolhida && data.getTime() === dataEscolhida.getTime();
-                        return (
-                          <div key={i} onClick={() => { if (!bloqueado) escolherData(data); }}
-                            style={{ textAlign: 'center', fontSize: '11px', padding: '6px 0', borderRadius: '8px', cursor: bloqueado ? 'default' : 'pointer', color: bloqueado ? '#4a4a4a' : '#f2f2f2', border: selecionada ? '1px solid #C9A227' : '1px solid #333', background: selecionada ? 'rgba(201,162,39,0.15)' : 'transparent' }}>
-                            {data.getDate()}
-                          </div>
-                        );
-                      })}
+
+                    <div onClick={() => setTela('club')}
+                      style={{ border: '1px solid #333', borderRadius: '12px', padding: '24px', cursor: 'pointer', textAlign: 'center' }}>
+                      <div style={{ fontSize: '30px', marginBottom: '6px' }}>👑</div>
+                      <p style={{ margin: 0, fontWeight: 500, fontSize: '16px' }}>Club Primen</p>
+                      <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{clienteLogado?.membro_club ? 'Você é membro ✓' : 'Assinatura de vantagens'}</p>
                     </div>
-                    {dataEscolhida && diaFechadoCliente && (
-                      <div style={{ textAlign: 'center', border: '1px dashed #444', borderRadius: '8px', padding: '16px', color: '#8a8a8a', fontSize: '13px' }}>
-                        Agenda fechada nesse dia. Escolha outra data.
+                  </>
+                )}
+
+                {/* ===== LANDING DO CLUB PRIMEN ===== */}
+                {tela === 'club' && (
+                  <>
+                    <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
+
+                    {/* Hero */}
+                    <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '16px', padding: '28px 20px', background: 'linear-gradient(180deg, rgba(201,162,39,0.10), rgba(201,162,39,0.02))', marginBottom: '18px' }}>
+                      <div style={{ fontSize: '44px', lineHeight: 1 }}>👑</div>
+                      <p style={{ fontSize: '22px', fontWeight: 700, color: OURO, margin: '8px 0 2px', letterSpacing: '0.5px' }}>CLUB PRIMEN</p>
+                      <p style={{ fontSize: '13px', color: '#d6d6d6', margin: 0 }}>{CLUB.chamada}</p>
+                    </div>
+
+                    {clienteLogado?.membro_club ? (
+                      <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '18px' }}>
+                        <p style={{ fontSize: '15px', color: '#f2f2f2', margin: 0 }}>Você já é membro! 🎉</p>
+                        <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '8px 0 0' }}>Aproveite suas vantagens de segunda a quinta.</p>
                       </div>
-                    )}
-                    {dataEscolhida && !diaFechadoCliente && (
+                    ) : (
                       <>
-                        <p style={estilos.titulo}>HORÁRIO · <span style={{ color: OURO, textTransform: 'capitalize' }}>{dataEscolhida.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}</span></p>
-                        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-                          {gradeDoDia(dataEscolhida).nomes.map((nome, i) => {
-                            const ativo = periodoEscolhido === i;
-                            return (
-                              <div key={i} onClick={() => { setPeriodoEscolhido(i); setHorarioEscolhido(null); }}
-                                style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '8px', fontSize: '11px', cursor: 'pointer', border: ativo ? '1px solid #C9A227' : '1px solid #333', background: ativo ? 'rgba(201,162,39,0.08)' : 'transparent' }}>
-                                {nome} <span style={{ color: '#7a7a7a' }}>({gradeDoDia(dataEscolhida).periodos[i].length})</span>
+                        {/* Card de preço */}
+                        <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '20px', marginBottom: '18px', background: '#111' }}>
+                          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0, letterSpacing: '1px' }}>ASSINATURA MENSAL</p>
+                          <p style={{ margin: '8px 0 0' }}>
+                            <span style={{ fontSize: '16px', color: OURO, verticalAlign: 'top' }}>R$ </span>
+                            <span style={{ fontSize: '40px', fontWeight: 700, color: OURO }}>{CLUB.preco}</span>
+                            <span style={{ fontSize: '14px', color: '#8a8a8a' }}>{CLUB.periodo}</span>
+                          </p>
+                        </div>
+
+                        {/* Vantagens */}
+                        <p style={estilos.titulo}>O QUE VOCÊ GANHA</p>
+                        <div style={{ marginBottom: '18px' }}>
+                          {CLUB.vantagens.map((v, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+                              <span style={{ width: '22px', height: '22px', borderRadius: '50%', background: 'rgba(201,162,39,0.15)', color: OURO, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', flexShrink: 0 }}>✓</span>
+                              <span style={{ fontSize: '13px', color: '#e6e6e6' }}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Dias do club */}
+                        <p style={estilos.titulo}>DIAS DO CLUB</p>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '18px' }}>
+                          {CLUB.dias.map((d) => (
+                            <div key={d} style={{ flex: 1, textAlign: 'center', padding: '10px 0', borderRadius: '8px', border: '1px solid #C9A227', background: 'rgba(201,162,39,0.08)', color: OURO, fontSize: '12px', fontWeight: 600 }}>{d}</div>
+                          ))}
+                        </div>
+
+                        {/* Equipe */}
+                        <p style={estilos.titulo}>SUA EQUIPE</p>
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                          {barbeiros.map((b) => (
+                            <div key={b.id} style={{ flex: 1, textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '14px 8px' }}>
+                              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 600, fontSize: '16px', margin: '0 auto 8px' }}>
+                                {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
                               </div>
-                            );
-                          })}
+                              <p style={{ margin: 0, fontSize: '12px', fontWeight: 500 }}>{b.nome}</p>
+                              <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
+                            </div>
+                          ))}
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '14px' }}>
-                          {gradeDoDia(dataEscolhida).periodos[periodoEscolhido].map((h) => {
-                            const ocupado = horariosOcupados.includes(h);
-                            const sel = horarioEscolhido === h;
-                            if (ocupado) return (<div key={h} style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', color: '#4a4a4a', border: '1px solid #1f1f1f', textDecoration: 'line-through', cursor: 'default' }}>{h}</div>);
-                            return (
-                              <div key={h} onClick={() => setHorarioEscolhido(h)}
-                                style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', cursor: 'pointer', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent' }}>{h}</div>
-                            );
-                          })}
-                        </div>
-                        <button disabled={!horarioEscolhido} onClick={() => setEtapa('dados')} style={estilos.botao(!!horarioEscolhido)}>Continuar</button>
+
+                        {/* CTA */}
+                        <button onClick={entrarNoClub} style={estilos.botao(true)}>Quero ser membro</button>
+                        <button onClick={whatsClub} style={{ width: '100%', marginTop: '10px', padding: '12px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>Tirar dúvidas no WhatsApp</button>
                       </>
                     )}
                   </>
                 )}
 
-                {etapa === 'dados' && (
+                {/* ===== AGENDAMENTO ===== */}
+                {tela === 'agendar' && (
                   <>
-                    <div style={estilos.voltar} onClick={() => setEtapa('dataHora')}>← Voltar</div>
-                    <p style={estilos.titulo}>SEUS DADOS</p>
-                    <div style={estilos.label}>Nome</div>
-                    <input style={estilos.input} value={nomeCliente} onChange={(e) => setNomeCliente(e.target.value)} placeholder="Seu nome" />
-                    <div style={estilos.label}>WhatsApp</div>
-                    <input style={estilos.input} value={telefoneCliente} onChange={(e) => setTelefoneCliente(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
-                    <div style={{ border: '1px solid #262626', borderRadius: '8px', padding: '14px', marginTop: '8px', fontSize: '13px', color: '#a3a3a3' }}>
-                      <p style={{ margin: 0, color: '#f2f2f2', fontWeight: 500 }}>Resumo</p>
-                      <p style={{ margin: '8px 0 0' }}>{servicoEscolhido?.nome}</p>
-                      <p style={{ margin: '4px 0 0' }}>com {barbeiroEscolhido?.nome}</p>
-                      <p style={{ margin: '4px 0 0', textTransform: 'capitalize' }}>{dataEscolhida?.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })} às {horarioEscolhido}</p>
-                    </div>
-                    {erroSalvar && <p style={{ color: '#e07a7a', fontSize: '12px', marginTop: '10px' }}>{erroSalvar}</p>}
-                    <button disabled={salvando} onClick={confirmarAgendamento} style={estilos.botao(!salvando)}>{salvando ? 'Salvando...' : 'Confirmar agendamento'}</button>
-                  </>
-                )}
+                    {etapa === 'servico' && (
+                      <>
+                        <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
+                        <p style={estilos.titulo}>ESCOLHA O SERVIÇO</p>
+                        {servicosAgendaveis.map((s) => (
+                          <div key={s.id} onClick={() => { setServicoEscolhido(s); setEtapa('equipe'); }}
+                            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px', cursor: 'pointer' }}>
+                            <div>
+                              <p style={{ margin: 0, fontWeight: 500 }}>{s.nome}</p>
+                              <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#7a7a7a' }}>{s.duracao_min} min</p>
+                            </div>
+                            <p style={{ margin: 0, color: OURO, fontWeight: 500 }}>R$ {Number(s.preco).toFixed(2).replace('.', ',')}</p>
+                          </div>
+                        ))}
+                      </>
+                    )}
 
-                {etapa === 'sucesso' && (
-                  <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '28px 20px' }}>
-                    <div style={{ fontSize: '32px', color: OURO }}>✓</div>
-                    <p style={{ fontWeight: 500, fontSize: '16px', margin: '10px 0 4px' }}>Horário reservado!</p>
-                    <p style={{ fontSize: '13px', color: '#a3a3a3', margin: '0 0 4px' }}>{servicoEscolhido?.nome} · {dataEscolhida?.toLocaleDateString('pt-BR')} às {horarioEscolhido}</p>
-                    <p style={{ fontSize: '12px', color: '#7a7a7a', margin: 0 }}>com {barbeiroEscolhido?.nome}</p>
-                    <button onClick={abrirWhatsApp} style={{ width: '100%', marginTop: '18px', padding: '12px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>
-                      Falar com a barbearia
-                    </button>
-                    <button onClick={recomecar} style={{ width: '100%', marginTop: '10px', padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }}>Fazer novo agendamento</button>
-                  </div>
+                    {etapa === 'equipe' && (
+                      <>
+                        <div style={estilos.voltar} onClick={() => setEtapa('servico')}>← {servicoEscolhido?.nome}</div>
+                        <p style={estilos.titulo}>EQUIPE DISPONÍVEL</p>
+                        <div onClick={() => setBarbeiroEscolhido({ id: null, nome: 'Sem preferência', semPref: true })}
+                          style={{ display: 'flex', alignItems: 'center', gap: '10px', border: barbeiroEscolhido?.semPref ? '1px solid #C9A227' : '1px solid #333', background: barbeiroEscolhido?.semPref ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
+                          <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#1f1f1f', border: '1px solid #444' }}></div>
+                          <p style={{ margin: 0 }}>Sem preferência</p>
+                        </div>
+                        {barbeiros.map((b) => {
+                          const sel = barbeiroEscolhido?.id === b.id && !barbeiroEscolhido?.semPref;
+                          return (
+                            <div key={b.id} onClick={() => setBarbeiroEscolhido(b)}
+                              style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
+                              <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#C9A227', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#0d0d0d', fontWeight: 500, fontSize: '13px' }}>
+                                {b.nome.split(' ').map(w => w[0]).slice(0, 2).join('')}
+                              </div>
+                              <div>
+                                <p style={{ margin: 0 }}>{b.nome}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <button disabled={!barbeiroEscolhido} onClick={() => setEtapa('dataHora')} style={estilos.botao(!!barbeiroEscolhido)}>Continuar</button>
+                      </>
+                    )}
+
+                    {etapa === 'dataHora' && (
+                      <>
+                        <div style={estilos.voltar} onClick={() => setEtapa('equipe')}>← {servicoEscolhido?.nome} · {barbeiroEscolhido?.nome}</div>
+                        <p style={estilos.titulo}>ESCOLHA A DATA</p>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '13px', textTransform: 'capitalize' }}>{mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</span>
+                          <span style={{ fontSize: '10px', color: '#6b6b6b' }}>dom fechado</span>
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '6px' }}>
+                          {['D','S','T','Q','Q','S','S'].map((d, i) => (<div key={i} style={{ textAlign: 'center', fontSize: '10px', color: '#6b6b6b' }}>{d}</div>))}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '16px' }}>
+                          {diasDoMes().map((data, i) => {
+                            if (!data) return <div key={i}></div>;
+                            const bloqueado = data.getDay() === 0 || ehPassado(data);
+                            const selecionada = dataEscolhida && data.getTime() === dataEscolhida.getTime();
+                            return (
+                              <div key={i} onClick={() => { if (!bloqueado) escolherData(data); }}
+                                style={{ textAlign: 'center', fontSize: '11px', padding: '6px 0', borderRadius: '8px', cursor: bloqueado ? 'default' : 'pointer', color: bloqueado ? '#4a4a4a' : '#f2f2f2', border: selecionada ? '1px solid #C9A227' : '1px solid #333', background: selecionada ? 'rgba(201,162,39,0.15)' : 'transparent' }}>
+                                {data.getDate()}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {dataEscolhida && diaFechadoCliente && (
+                          <div style={{ textAlign: 'center', border: '1px dashed #444', borderRadius: '8px', padding: '16px', color: '#8a8a8a', fontSize: '13px' }}>
+                            Agenda fechada nesse dia. Escolha outra data.
+                          </div>
+                        )}
+                        {dataEscolhida && !diaFechadoCliente && (
+                          <>
+                            <p style={estilos.titulo}>HORÁRIO · <span style={{ color: OURO, textTransform: 'capitalize' }}>{dataEscolhida.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })}</span></p>
+                            <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                              {gradeDoDia(dataEscolhida).nomes.map((nome, i) => {
+                                const ativo = periodoEscolhido === i;
+                                return (
+                                  <div key={i} onClick={() => { setPeriodoEscolhido(i); setHorarioEscolhido(null); }}
+                                    style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '8px', fontSize: '11px', cursor: 'pointer', border: ativo ? '1px solid #C9A227' : '1px solid #333', background: ativo ? 'rgba(201,162,39,0.08)' : 'transparent' }}>
+                                    {nome} <span style={{ color: '#7a7a7a' }}>({gradeDoDia(dataEscolhida).periodos[i].length})</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '14px' }}>
+                              {gradeDoDia(dataEscolhida).periodos[periodoEscolhido].map((h) => {
+                                const ocupado = horariosOcupados.includes(h);
+                                const sel = horarioEscolhido === h;
+                                if (ocupado) return (<div key={h} style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', color: '#4a4a4a', border: '1px solid #1f1f1f', textDecoration: 'line-through', cursor: 'default' }}>{h}</div>);
+                                return (
+                                  <div key={h} onClick={() => setHorarioEscolhido(h)}
+                                    style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', cursor: 'pointer', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent' }}>{h}</div>
+                                );
+                              })}
+                            </div>
+                            <button disabled={!horarioEscolhido} onClick={confirmarAgendamento} style={estilos.botao(!!horarioEscolhido && !salvando)}>{salvando ? 'Salvando...' : 'Confirmar agendamento'}</button>
+                            {erroSalvar && <p style={{ color: '#e07a7a', fontSize: '12px', marginTop: '10px' }}>{erroSalvar}</p>}
+                          </>
+                        )}
+                      </>
+                    )}
+
+                    {etapa === 'sucesso' && (
+                      <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '28px 20px' }}>
+                        <div style={{ fontSize: '32px', color: OURO }}>✓</div>
+                        <p style={{ fontWeight: 500, fontSize: '16px', margin: '10px 0 4px' }}>Horário reservado!</p>
+                        <p style={{ fontSize: '13px', color: '#a3a3a3', margin: '0 0 4px' }}>{servicoEscolhido?.nome} · {dataEscolhida?.toLocaleDateString('pt-BR')} às {horarioEscolhido}</p>
+                        <p style={{ fontSize: '12px', color: '#7a7a7a', margin: 0 }}>com {barbeiroEscolhido?.nome}</p>
+                        <button onClick={abrirWhatsApp} style={{ width: '100%', marginTop: '18px', padding: '12px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>Falar com a barbearia</button>
+                        <button onClick={() => setTela('menu')} style={{ width: '100%', marginTop: '10px', padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }}>Voltar ao menu</button>
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
