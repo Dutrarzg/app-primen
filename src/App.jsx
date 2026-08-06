@@ -47,6 +47,12 @@ const CLUB = {
   dias: ['SEG', 'TER', 'QUA', 'QUI'],
 };
 
+// Converte o celular (só números) num e-mail interno pro Supabase Auth
+function telParaEmail(tel) {
+  const nums = tel.replace(/\D/g, '');
+  return `${nums}@primen.app`;
+}
+
 function dataParaISO(data) {
   const ano = data.getFullYear();
   const mes = String(data.getMonth() + 1).padStart(2, '0');
@@ -86,6 +92,7 @@ function App() {
   const [loginTel, setLoginTel] = useState('');
   const [loginSenha, setLoginSenha] = useState('');
   const [cadastroNome, setCadastroNome] = useState('');
+  const [cadastroSenha, setCadastroSenha] = useState('');
   const [erroLogin, setErroLogin] = useState('');
   const [processandoLogin, setProcessandoLogin] = useState(false);
 
@@ -133,7 +140,6 @@ function App() {
   const [bloqueioBarbeiro, setBloqueioBarbeiro] = useState('todos');
   const [bloqueioMotivo, setBloqueioMotivo] = useState('');
 
-  // ===== PRODUTOS =====
   const [produtos, setProdutos] = useState([]);
   const [mostrarProdutos, setMostrarProdutos] = useState(false);
   const [mostrarFormProduto, setMostrarFormProduto] = useState(false);
@@ -142,22 +148,18 @@ function App() {
   const [prodEstoque, setProdEstoque] = useState('');
   const [prodEditandoId, setProdEditandoId] = useState(null);
   const [erroProduto, setErroProduto] = useState('');
-  // Venda de produto
-  const [vendaProduto, setVendaProduto] = useState(null); // produto sendo vendido
+  const [vendaProduto, setVendaProduto] = useState(null);
   const [vendaQtd, setVendaQtd] = useState('1');
   const [erroVenda, setErroVenda] = useState('');
 
-  // ===== FECHAR CAIXA (atendimentos) =====
-  const [pagamentoAg, setPagamentoAg] = useState(null); // agendamento sendo pago
+  const [pagamentoAg, setPagamentoAg] = useState(null);
   const [pagamentoValor, setPagamentoValor] = useState('');
-  const [agsPagos, setAgsPagos] = useState([]); // ids de agendamentos já pagos hoje
+  const [agsPagos, setAgsPagos] = useState([]);
 
-  // ===== FINANCEIRO =====
   const [mostrarFinanceiro, setMostrarFinanceiro] = useState(false);
   const [movimentacoes, setMovimentacoes] = useState([]);
-  const [finAba, setFinAba] = useState('geral'); // geral | barbeiro | club | produtos
-  const [finPeriodo, setFinPeriodo] = useState('dia'); // dia | mes
-  // Lançamento manual do Club
+  const [finAba, setFinAba] = useState('geral');
+  const [finPeriodo, setFinPeriodo] = useState('dia');
   const [mostrarFormClubPag, setMostrarFormClubPag] = useState(false);
   const [clubPagValor, setClubPagValor] = useState('');
   const [clubPagDesc, setClubPagDesc] = useState('');
@@ -176,8 +178,16 @@ function App() {
       setCarregando(false);
     }
     buscarDados();
-    const telSalvo = localStorage.getItem('primen_tel');
-    if (telSalvo) setLoginTel(telSalvo);
+
+    // Se já existe uma sessão do Auth ativa, entra direto
+    async function checarSessao() {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', session.user.id).maybeSingle();
+        if (cli) { setClienteLogado(cli); setTela('menu'); }
+      }
+    }
+    checarSessao();
   }, []);
 
   const servicosAgendaveis = servicos.filter((s) => !s.nome.toLowerCase().includes('club'));
@@ -207,34 +217,68 @@ function App() {
     return data < zero;
   }
 
+  // ===== LOGIN COM SUPABASE AUTH =====
   async function tentarEntrar() {
     setErroLogin('');
-    if (!loginTel.trim() || !loginSenha.trim()) { setErroLogin('Preencha telefone e senha.'); return; }
+    if (!loginTel.trim() || !loginSenha.trim()) { setErroLogin('Preencha celular e senha.'); return; }
     setProcessandoLogin(true);
-    const { data: cliente } = await supabase.from('clientes').select('*').eq('telefone', loginTel.trim()).maybeSingle();
+    const email = telParaEmail(loginTel);
+
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password: loginSenha.trim() });
+
+    if (error) {
+      setProcessandoLogin(false);
+      // Se o usuário não existe, manda pro cadastro; senão, senha errada
+      if (error.message.toLowerCase().includes('invalid')) {
+        // Verifica se o número já tem conta
+        const { data: existe } = await supabase.from('clientes').select('id').eq('telefone', loginTel.trim()).maybeSingle();
+        if (existe) { setErroLogin('Senha incorreta.'); }
+        else { setTela('cadastro'); }
+      } else {
+        setErroLogin('Erro ao entrar. Tente novamente.');
+      }
+      return;
+    }
+
+    // Login OK — busca os dados do cliente
+    const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', data.user.id).maybeSingle();
     setProcessandoLogin(false);
-    if (!cliente) { setTela('cadastro'); return; }
-    if (cliente.senha !== loginSenha.trim()) { setErroLogin('Senha incorreta.'); return; }
     localStorage.setItem('primen_tel', loginTel.trim());
-    setClienteLogado(cliente);
+    setClienteLogado(cli);
     setTela('menu');
   }
 
   async function cadastrar() {
     setErroLogin('');
     if (!cadastroNome.trim()) { setErroLogin('Digite seu nome.'); return; }
+    if (cadastroSenha.length < 6) { setErroLogin('A senha precisa ter pelo menos 6 caracteres.'); return; }
     setProcessandoLogin(true);
-    const { data: novo, error } = await supabase.from('clientes')
-      .insert({ nome: cadastroNome.trim(), telefone: loginTel.trim(), senha: loginSenha.trim() }).select().single();
+    const email = telParaEmail(loginTel);
+
+    // Cria o usuário no Auth (senha criptografada)
+    const { data: signData, error: signError } = await supabase.auth.signUp({ email, password: cadastroSenha });
+    if (signError) {
+      setProcessandoLogin(false);
+      if (signError.message.toLowerCase().includes('already')) { setErroLogin('Esse número já tem conta. Volte e faça login.'); }
+      else { setErroLogin('Erro ao criar conta. Tente novamente.'); }
+      return;
+    }
+
+    // Cria a linha na tabela clientes ligada ao Auth
+    const { data: novo, error: erroCli } = await supabase.from('clientes')
+      .insert({ nome: cadastroNome.trim(), telefone: loginTel.trim(), auth_id: signData.user.id })
+      .select().single();
     setProcessandoLogin(false);
-    if (error) { setErroLogin('Erro ao cadastrar. Tente outro número.'); return; }
+    if (erroCli) { setErroLogin('Erro ao salvar seus dados. Tente novamente.'); return; }
+
     localStorage.setItem('primen_tel', loginTel.trim());
     setClienteLogado(novo);
-    setCadastroNome('');
+    setCadastroNome(''); setCadastroSenha('');
     setTela('menu');
   }
 
-  function sairDaConta() {
+  async function sairDaConta() {
+    await supabase.auth.signOut();
     setClienteLogado(null);
     setLoginSenha('');
     setTela('login');
@@ -330,7 +374,6 @@ function App() {
       .select('id, horario, status, origem, servico_id, barbeiro_id, clientes(nome, telefone), servicos(nome, preco), barbeiros(nome)')
       .eq('data', dataISO).neq('status', 'cancelado').order('horario', { ascending: true });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
-    // Quais agendamentos desse dia já foram pagos (têm movimentação de serviço)
     const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id').eq('data', dataISO).eq('categoria', 'servico');
     setAgsPagos((movs || []).map((m) => m.agendamento_id).filter(Boolean));
     setAgendaDoDia(ags || []);
@@ -355,7 +398,6 @@ function App() {
     carregarMembros();
   }
 
-  // ===== PRODUTOS =====
   async function carregarProdutos() {
     const { data } = await supabase.from('produtos').select('*').order('nome', { ascending: true });
     setProdutos(data || []);
@@ -397,23 +439,19 @@ function App() {
     carregarProdutos();
   }
 
-  // Abrir venda de um produto
   function abrirVenda(p) {
     setVendaProduto(p);
     setVendaQtd('1');
     setErroVenda('');
   }
 
-  // Confirmar venda: baixa estoque + grava no livro caixa
   async function confirmarVenda() {
     setErroVenda('');
     const qtd = parseInt(vendaQtd) || 0;
     if (qtd <= 0) { setErroVenda('Quantidade inválida.'); return; }
     if (qtd > vendaProduto.estoque) { setErroVenda('Estoque insuficiente (' + vendaProduto.estoque + ' disponível).'); return; }
     const valorTotal = qtd * Number(vendaProduto.preco);
-    // Baixa no estoque
     await supabase.from('produtos').update({ estoque: vendaProduto.estoque - qtd }).eq('id', vendaProduto.id);
-    // Grava no livro caixa
     await supabase.from('movimentacoes').insert({
       descricao: `Venda: ${vendaProduto.nome} x${qtd}`,
       valor: valorTotal, categoria: 'produto', produto_id: vendaProduto.id, quantidade: qtd,
@@ -423,7 +461,6 @@ function App() {
     carregarProdutos();
   }
 
-  // ===== FECHAR CAIXA (atendimentos) =====
   function abrirPagamento(ag) {
     setPagamentoAg(ag);
     setPagamentoValor(ag.servicos?.preco ? String(ag.servicos.preco).replace('.', ',') : '');
@@ -440,9 +477,7 @@ function App() {
     carregarAgenda(dataDono);
   }
 
-  // ===== FINANCEIRO =====
   async function carregarFinanceiro() {
-    // Carrega movimentações do mês atual (filtra por dia/mês na tela)
     const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
     const fim = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
     const { data } = await supabase.from('movimentacoes')
@@ -468,13 +503,12 @@ function App() {
     carregarFinanceiro();
   }
 
-  // Filtra as movimentações conforme o período escolhido (dia = hoje, mes = mês todo)
   function movsFiltradas() {
     if (finPeriodo === 'dia') {
       const hojeISO = dataParaISO(new Date());
       return movimentacoes.filter((m) => m.data === hojeISO);
     }
-    return movimentacoes; // já vem do mês
+    return movimentacoes;
   }
 
   function mudarDiaDono(delta) {
@@ -529,13 +563,11 @@ function App() {
     botaoSec: { width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #C9A227', background: 'transparent', color: OURO, fontSize: '12px', fontWeight: 500, cursor: 'pointer', marginBottom: '8px' },
   };
 
-  // ---- Cálculos do financeiro (usados na tela) ----
   const movs = movsFiltradas();
   const totalGeral = movs.reduce((s, m) => s + Number(m.valor), 0);
   const totalProdutos = movs.filter((m) => m.categoria === 'produto').reduce((s, m) => s + Number(m.valor), 0);
   const totalServicos = movs.filter((m) => m.categoria === 'servico').reduce((s, m) => s + Number(m.valor), 0);
   const totalClub = movs.filter((m) => m.categoria === 'club').reduce((s, m) => s + Number(m.valor), 0);
-  // Por barbeiro (só serviços)
   const porBarbeiro = {};
   movs.filter((m) => m.categoria === 'servico').forEach((m) => {
     const nome = m.barbeiros?.nome || 'Sem barbeiro';
@@ -578,11 +610,13 @@ function App() {
 
                 {tela === 'cadastro' && (
                   <>
-                    <div style={estilos.voltar} onClick={() => setTela('login')}>← Voltar</div>
+                    <div style={estilos.voltar} onClick={() => { setTela('login'); setCadastroSenha(''); setErroLogin(''); }}>← Voltar</div>
                     <p style={estilos.titulo}>CRIAR CONTA</p>
-                    <p style={{ fontSize: '13px', color: '#a3a3a3', marginBottom: '14px' }}>Esse número ainda não tem conta. Como é seu nome?</p>
+                    <p style={{ fontSize: '13px', color: '#a3a3a3', marginBottom: '14px' }}>Esse número ainda não tem conta. Vamos criar!</p>
                     <div style={estilos.label}>Nome</div>
                     <input style={estilos.input} value={cadastroNome} onChange={(e) => setCadastroNome(e.target.value)} placeholder="Seu nome" />
+                    <div style={estilos.label}>Crie uma senha (mín. 6 caracteres)</div>
+                    <input style={estilos.input} type="password" value={cadastroSenha} onChange={(e) => setCadastroSenha(e.target.value)} placeholder="Sua senha" />
                     {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
                     <button onClick={cadastrar} disabled={processandoLogin} style={estilos.botao(!processandoLogin)}>{processandoLogin ? 'Criando...' : 'Criar conta e entrar'}</button>
                   </>
@@ -845,7 +879,6 @@ function App() {
                   <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={() => { setModo('cliente'); setSenhaDigitada(''); setMostrarFinanceiro(false); }}>Sair</span>
                 </div>
 
-                {/* ===== BOTÃO FINANCEIRO ===== */}
                 <button style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '16px' }}
                   onClick={() => { if (!mostrarFinanceiro) carregarFinanceiro(); setMostrarFinanceiro(!mostrarFinanceiro); }}>
                   {mostrarFinanceiro ? '← Voltar à agenda' : '💰 Financeiro'}
@@ -853,7 +886,6 @@ function App() {
 
                 {mostrarFinanceiro ? (
                   <>
-                    {/* Seletor de período */}
                     <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
                       {[['dia', 'Hoje'], ['mes', 'Mês']].map(([id, label]) => (
                         <div key={id} onClick={() => setFinPeriodo(id)}
@@ -861,13 +893,11 @@ function App() {
                       ))}
                     </div>
 
-                    {/* Total geral */}
                     <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '12px', padding: '18px', marginBottom: '14px', background: 'rgba(201,162,39,0.05)' }}>
                       <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0, letterSpacing: '1px' }}>ENTRADAS {finPeriodo === 'dia' ? 'DE HOJE' : 'DO MÊS'}</p>
                       <p style={{ fontSize: '32px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalGeral)}</p>
                     </div>
 
-                    {/* Abas */}
                     <div style={{ display: 'flex', gap: '4px', marginBottom: '14px' }}>
                       {[['geral', 'Geral'], ['barbeiro', 'Barbeiros'], ['club', 'Club'], ['produtos', 'Produtos']].map(([id, label]) => (
                         <div key={id} onClick={() => setFinAba(id)}
@@ -875,7 +905,6 @@ function App() {
                       ))}
                     </div>
 
-                    {/* Conteúdo das abas */}
                     {finAba === 'geral' && (
                       <>
                         <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
@@ -1082,7 +1111,6 @@ function App() {
                       })
                     )}
 
-                    {/* ===== MEMBROS DO CLUB ===== */}
                     <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
                       {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
                     </button>
@@ -1117,7 +1145,6 @@ function App() {
                       </div>
                     )}
 
-                    {/* ===== PRODUTOS ===== */}
                     <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
                       {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
                     </button>
