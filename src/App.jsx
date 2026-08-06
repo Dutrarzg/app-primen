@@ -19,7 +19,6 @@ const gradeSabado = {
   nomes: ['Manhã', 'Tarde'],
 };
 
-// Gera horários de HH:MM em HH:MM de 15 em 15 minutos (inclusive o fim)
 function gerarHorarios(inicioH, inicioM, fimH, fimM) {
   const lista = [];
   let h = inicioH, m = inicioM;
@@ -31,7 +30,6 @@ function gerarHorarios(inicioH, inicioM, fimH, fimM) {
   return lista;
 }
 
-// Grades de SEGUNDA por barbeiro (chave = nome exato no banco)
 const gradeSegundaPorBarbeiro = {
   'Luiz Guilherme': { periodos: [gerarHorarios(15, 0, 18, 0)], nomes: ['Tarde'] },
   'Rennan Martins': { periodos: [gerarHorarios(12, 0, 20, 0)], nomes: ['Dia todo'] },
@@ -61,6 +59,10 @@ function formatarTelefone(valor) {
   if (nums.length <= 2) return nums.length ? `(${nums}` : '';
   if (nums.length <= 7) return `(${nums.slice(0, 2)}) ${nums.slice(2)}`;
   return `(${nums.slice(0, 2)}) ${nums.slice(2, 7)}-${nums.slice(7)}`;
+}
+
+function formatarReal(valor) {
+  return Number(valor).toFixed(2).replace('.', ',');
 }
 
 function AvatarBarbeiro({ barbeiro, tamanho = 34 }) {
@@ -131,6 +133,35 @@ function App() {
   const [bloqueioBarbeiro, setBloqueioBarbeiro] = useState('todos');
   const [bloqueioMotivo, setBloqueioMotivo] = useState('');
 
+  // ===== PRODUTOS =====
+  const [produtos, setProdutos] = useState([]);
+  const [mostrarProdutos, setMostrarProdutos] = useState(false);
+  const [mostrarFormProduto, setMostrarFormProduto] = useState(false);
+  const [prodNome, setProdNome] = useState('');
+  const [prodPreco, setProdPreco] = useState('');
+  const [prodEstoque, setProdEstoque] = useState('');
+  const [prodEditandoId, setProdEditandoId] = useState(null);
+  const [erroProduto, setErroProduto] = useState('');
+  // Venda de produto
+  const [vendaProduto, setVendaProduto] = useState(null); // produto sendo vendido
+  const [vendaQtd, setVendaQtd] = useState('1');
+  const [erroVenda, setErroVenda] = useState('');
+
+  // ===== FECHAR CAIXA (atendimentos) =====
+  const [pagamentoAg, setPagamentoAg] = useState(null); // agendamento sendo pago
+  const [pagamentoValor, setPagamentoValor] = useState('');
+  const [agsPagos, setAgsPagos] = useState([]); // ids de agendamentos já pagos hoje
+
+  // ===== FINANCEIRO =====
+  const [mostrarFinanceiro, setMostrarFinanceiro] = useState(false);
+  const [movimentacoes, setMovimentacoes] = useState([]);
+  const [finAba, setFinAba] = useState('geral'); // geral | barbeiro | club | produtos
+  const [finPeriodo, setFinPeriodo] = useState('dia'); // dia | mes
+  // Lançamento manual do Club
+  const [mostrarFormClubPag, setMostrarFormClubPag] = useState(false);
+  const [clubPagValor, setClubPagValor] = useState('');
+  const [clubPagDesc, setClubPagDesc] = useState('');
+
   useEffect(() => {
     const timer = setTimeout(() => setMostrarAbertura(false), 6000);
     return () => clearTimeout(timer);
@@ -151,14 +182,10 @@ function App() {
 
   const servicosAgendaveis = servicos.filter((s) => !s.nome.toLowerCase().includes('club'));
 
-  // Decide a grade: segunda depende do barbeiro; sábado tem grade própria; resto usa semana.
-  // Retorna null se for segunda com "sem preferência" (precisa escolher barbeiro),
-  // ou se o barbeiro não atende na segunda.
   function gradeDoDia(data) {
     const dow = data.getDay();
     if (dow === 6) return gradeSabado;
     if (dow === 1) {
-      // Segunda
       if (!barbeiroEscolhido || barbeiroEscolhido.semPref) return { precisaBarbeiro: true };
       const g = gradeSegundaPorBarbeiro[barbeiroEscolhido.nome];
       return g || { naoAtende: true };
@@ -300,12 +327,16 @@ function App() {
     const dataISO = dataParaISO(data);
     const { data: ags } = await supabase
       .from('agendamentos')
-      .select('id, horario, status, origem, clientes(nome, telefone), servicos(nome), barbeiros(nome)')
+      .select('id, horario, status, origem, servico_id, barbeiro_id, clientes(nome, telefone), servicos(nome, preco), barbeiros(nome)')
       .eq('data', dataISO).neq('status', 'cancelado').order('horario', { ascending: true });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
+    // Quais agendamentos desse dia já foram pagos (têm movimentação de serviço)
+    const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id').eq('data', dataISO).eq('categoria', 'servico');
+    setAgsPagos((movs || []).map((m) => m.agendamento_id).filter(Boolean));
     setAgendaDoDia(ags || []);
     setBloqueiosDoDia(bloqs || []);
     setCarregandoAgenda(false);
+    setPagamentoAg(null);
   }
 
   async function carregarMembros() {
@@ -322,6 +353,128 @@ function App() {
       .update({ membro_club: false, club_plano: null, club_barbeiro_id: null })
       .eq('id', id);
     carregarMembros();
+  }
+
+  // ===== PRODUTOS =====
+  async function carregarProdutos() {
+    const { data } = await supabase.from('produtos').select('*').order('nome', { ascending: true });
+    setProdutos(data || []);
+  }
+
+  function abrirFormNovoProduto() {
+    setProdEditandoId(null);
+    setProdNome(''); setProdPreco(''); setProdEstoque('');
+    setErroProduto('');
+    setMostrarFormProduto(true);
+  }
+
+  function abrirFormEditarProduto(p) {
+    setProdEditandoId(p.id);
+    setProdNome(p.nome);
+    setProdPreco(String(p.preco).replace('.', ','));
+    setProdEstoque(String(p.estoque));
+    setErroProduto('');
+    setMostrarFormProduto(true);
+  }
+
+  async function salvarProduto() {
+    setErroProduto('');
+    if (!prodNome.trim()) { setErroProduto('Digite o nome do produto.'); return; }
+    const precoNum = parseFloat(prodPreco.replace(',', '.')) || 0;
+    const estoqueNum = parseInt(prodEstoque) || 0;
+    if (prodEditandoId) {
+      await supabase.from('produtos').update({ nome: prodNome.trim(), preco: precoNum, estoque: estoqueNum }).eq('id', prodEditandoId);
+    } else {
+      await supabase.from('produtos').insert({ nome: prodNome.trim(), preco: precoNum, estoque: estoqueNum });
+    }
+    setMostrarFormProduto(false);
+    setProdNome(''); setProdPreco(''); setProdEstoque(''); setProdEditandoId(null);
+    carregarProdutos();
+  }
+
+  async function removerProduto(id) {
+    await supabase.from('produtos').delete().eq('id', id);
+    carregarProdutos();
+  }
+
+  // Abrir venda de um produto
+  function abrirVenda(p) {
+    setVendaProduto(p);
+    setVendaQtd('1');
+    setErroVenda('');
+  }
+
+  // Confirmar venda: baixa estoque + grava no livro caixa
+  async function confirmarVenda() {
+    setErroVenda('');
+    const qtd = parseInt(vendaQtd) || 0;
+    if (qtd <= 0) { setErroVenda('Quantidade inválida.'); return; }
+    if (qtd > vendaProduto.estoque) { setErroVenda('Estoque insuficiente (' + vendaProduto.estoque + ' disponível).'); return; }
+    const valorTotal = qtd * Number(vendaProduto.preco);
+    // Baixa no estoque
+    await supabase.from('produtos').update({ estoque: vendaProduto.estoque - qtd }).eq('id', vendaProduto.id);
+    // Grava no livro caixa
+    await supabase.from('movimentacoes').insert({
+      descricao: `Venda: ${vendaProduto.nome} x${qtd}`,
+      valor: valorTotal, categoria: 'produto', produto_id: vendaProduto.id, quantidade: qtd,
+      data: dataParaISO(new Date()),
+    });
+    setVendaProduto(null);
+    carregarProdutos();
+  }
+
+  // ===== FECHAR CAIXA (atendimentos) =====
+  function abrirPagamento(ag) {
+    setPagamentoAg(ag);
+    setPagamentoValor(ag.servicos?.preco ? String(ag.servicos.preco).replace('.', ',') : '');
+  }
+
+  async function confirmarPagamento() {
+    const valorNum = parseFloat(pagamentoValor.replace(',', '.')) || 0;
+    await supabase.from('movimentacoes').insert({
+      descricao: `Atendimento: ${pagamentoAg.servicos?.nome || 'serviço'} (${pagamentoAg.clientes?.nome || 'cliente'})`,
+      valor: valorNum, categoria: 'servico', barbeiro_id: pagamentoAg.barbeiro_id || null,
+      agendamento_id: pagamentoAg.id, data: dataParaISO(dataDono),
+    });
+    setPagamentoAg(null);
+    carregarAgenda(dataDono);
+  }
+
+  // ===== FINANCEIRO =====
+  async function carregarFinanceiro() {
+    // Carrega movimentações do mês atual (filtra por dia/mês na tela)
+    const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const fim = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    const { data } = await supabase.from('movimentacoes')
+      .select('*, barbeiros(nome)')
+      .gte('data', dataParaISO(ini)).lte('data', dataParaISO(fim))
+      .order('criado_em', { ascending: false });
+    setMovimentacoes(data || []);
+  }
+
+  async function lancarPagamentoClub() {
+    const valorNum = parseFloat(clubPagValor.replace(',', '.')) || 0;
+    if (valorNum <= 0) return;
+    await supabase.from('movimentacoes').insert({
+      descricao: clubPagDesc.trim() || 'Assinatura Club Primen',
+      valor: valorNum, categoria: 'club', data: dataParaISO(new Date()),
+    });
+    setClubPagValor(''); setClubPagDesc(''); setMostrarFormClubPag(false);
+    carregarFinanceiro();
+  }
+
+  async function removerMovimentacao(id) {
+    await supabase.from('movimentacoes').delete().eq('id', id);
+    carregarFinanceiro();
+  }
+
+  // Filtra as movimentações conforme o período escolhido (dia = hoje, mes = mês todo)
+  function movsFiltradas() {
+    if (finPeriodo === 'dia') {
+      const hojeISO = dataParaISO(new Date());
+      return movimentacoes.filter((m) => m.data === hojeISO);
+    }
+    return movimentacoes; // já vem do mês
   }
 
   function mudarDiaDono(delta) {
@@ -376,6 +529,19 @@ function App() {
     botaoSec: { width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #C9A227', background: 'transparent', color: OURO, fontSize: '12px', fontWeight: 500, cursor: 'pointer', marginBottom: '8px' },
   };
 
+  // ---- Cálculos do financeiro (usados na tela) ----
+  const movs = movsFiltradas();
+  const totalGeral = movs.reduce((s, m) => s + Number(m.valor), 0);
+  const totalProdutos = movs.filter((m) => m.categoria === 'produto').reduce((s, m) => s + Number(m.valor), 0);
+  const totalServicos = movs.filter((m) => m.categoria === 'servico').reduce((s, m) => s + Number(m.valor), 0);
+  const totalClub = movs.filter((m) => m.categoria === 'club').reduce((s, m) => s + Number(m.valor), 0);
+  // Por barbeiro (só serviços)
+  const porBarbeiro = {};
+  movs.filter((m) => m.categoria === 'servico').forEach((m) => {
+    const nome = m.barbeiros?.nome || 'Sem barbeiro';
+    porBarbeiro[nome] = (porBarbeiro[nome] || 0) + Number(m.valor);
+  });
+
   return (
     <>
       {mostrarAbertura && (
@@ -428,14 +594,12 @@ function App() {
                       <span style={{ fontSize: '13px', color: '#f2f2f2' }}>Olá, {clienteLogado?.nome?.split(' ')[0]} 👋</span>
                       <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={sairDaConta}>Sair</span>
                     </div>
-
                     <div onClick={() => { recomecarAgendamento(); setTela('agendar'); }}
                       style={{ border: '1px solid #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '14px', cursor: 'pointer', textAlign: 'center', background: 'rgba(201,162,39,0.05)' }}>
                       <div style={{ fontSize: '30px', marginBottom: '6px' }}>✂️</div>
                       <p style={{ margin: 0, fontWeight: 500, fontSize: '16px', color: OURO }}>Agendar horário</p>
                       <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>Escolha serviço, profissional e horário</p>
                     </div>
-
                     <div onClick={abrirClub}
                       style={{ border: '1px solid #333', borderRadius: '12px', padding: '24px', cursor: 'pointer', textAlign: 'center' }}>
                       <div style={{ fontSize: '30px', marginBottom: '6px' }}>👑</div>
@@ -453,7 +617,6 @@ function App() {
                       <p style={{ fontSize: '22px', fontWeight: 700, color: OURO, margin: '8px 0 2px', letterSpacing: '0.5px' }}>CLUB PRIMEN</p>
                       <p style={{ fontSize: '13px', color: '#d6d6d6', margin: 0 }}>{CLUB.chamada}</p>
                     </div>
-
                     {clienteLogado?.membro_club ? (
                       <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '18px' }}>
                         <p style={{ fontSize: '15px', color: '#f2f2f2', margin: 0 }}>Você já é membro! 🎉</p>
@@ -473,7 +636,6 @@ function App() {
                             </div>
                           );
                         })}
-
                         {clubPlano && (
                           <>
                             <p style={{ ...estilos.titulo, marginTop: '18px' }}>ESCOLHA SEU BARBEIRO</p>
@@ -497,7 +659,6 @@ function App() {
                             })}
                           </>
                         )}
-
                         {clubPlano && (
                           <>
                             <p style={{ ...estilos.titulo, marginTop: '18px' }}>O QUE VOCÊ GANHA</p>
@@ -511,13 +672,11 @@ function App() {
                             </div>
                           </>
                         )}
-
                         <div style={{ display: 'flex', gap: '8px', marginBottom: '18px' }}>
                           {CLUB.dias.map((d) => (
                             <div key={d} style={{ flex: 1, textAlign: 'center', padding: '10px 0', borderRadius: '8px', border: '1px solid #C9A227', background: 'rgba(201,162,39,0.08)', color: OURO, fontSize: '12px', fontWeight: 600 }}>{d}</div>
                           ))}
                         </div>
-
                         <button onClick={confirmarAssinaturaClub} disabled={!clubPlano || !clubBarbeiro || processandoClub} style={estilos.botao(!!clubPlano && !!clubBarbeiro && !processandoClub)}>
                           {processandoClub ? 'Confirmando...' : 'Quero ser membro'}
                         </button>
@@ -540,7 +699,7 @@ function App() {
                               <p style={{ margin: 0, fontWeight: 500 }}>{s.nome}</p>
                               <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#7a7a7a' }}>{s.duracao_min} min</p>
                             </div>
-                            <p style={{ margin: 0, color: OURO, fontWeight: 500 }}>R$ {Number(s.preco).toFixed(2).replace('.', ',')}</p>
+                            <p style={{ margin: 0, color: OURO, fontWeight: 500 }}>R$ {formatarReal(s.preco)}</p>
                           </div>
                         ))}
                       </>
@@ -683,124 +842,345 @@ function App() {
               <>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                   <p style={{ ...estilos.titulo, margin: 0 }}>PAINEL DO DONO</p>
-                  <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={() => { setModo('cliente'); setSenhaDigitada(''); }}>Sair</span>
+                  <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={() => { setModo('cliente'); setSenhaDigitada(''); setMostrarFinanceiro(false); }}>Sair</span>
                 </div>
 
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <span onClick={() => mudarDiaDono(-1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>‹</span>
-                  <span style={{ fontSize: '14px', textTransform: 'capitalize', textAlign: 'center' }}>
-                    {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-                  </span>
-                  <span onClick={() => mudarDiaDono(1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>›</span>
-                </div>
-
-                {bloqueiosDoDia.map((b) => (
-                  <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(163,61,61,0.12)', border: '1px solid #a33d3d', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-                    <span style={{ fontSize: '12px', color: '#e07a7a' }}>
-                      {b.barbeiro_id === null ? 'Barbearia fechada' : 'Fechado: ' + (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome || 'barbeiro')}
-                      {b.motivo ? ' · ' + b.motivo : ''}
-                    </span>
-                    <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>
-                  </div>
-                ))}
-
-                <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
-                  {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+                {/* ===== BOTÃO FINANCEIRO ===== */}
+                <button style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '16px' }}
+                  onClick={() => { if (!mostrarFinanceiro) carregarFinanceiro(); setMostrarFinanceiro(!mostrarFinanceiro); }}>
+                  {mostrarFinanceiro ? '← Voltar à agenda' : '💰 Financeiro'}
                 </button>
 
-                {mostrarFormBloqueio && (
-                  <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                    <div style={estilos.label}>Fechar para</div>
-                    <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
-                      <option value="todos">Barbearia toda</option>
-                      {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
-                    </select>
-                    <div style={estilos.label}>Motivo (opcional)</div>
-                    <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
-                    <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
-                  </div>
-                )}
-
-                <button style={estilos.botaoSec} onClick={() => { setMostrarFormManual(!mostrarFormManual); setMostrarFormBloqueio(false); }}>
-                  {mostrarFormManual ? 'Cancelar' : '+ Agendar para cliente'}
-                </button>
-
-                {mostrarFormManual && (
-                  <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                    <div style={estilos.label}>Nome do cliente</div>
-                    <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
-                    <div style={estilos.label}>WhatsApp (opcional)</div>
-                    <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
-                    <div style={estilos.label}>Serviço</div>
-                    <select style={estilos.input} value={manualServico} onChange={(e) => setManualServico(e.target.value)}>
-                      <option value="">Escolha</option>
-                      {servicos.map((s) => (<option key={s.id} value={s.id}>{s.nome}</option>))}
-                    </select>
-                    <div style={estilos.label}>Barbeiro (opcional)</div>
-                    <select style={estilos.input} value={manualBarbeiro} onChange={(e) => setManualBarbeiro(e.target.value)}>
-                      <option value="">Sem preferência</option>
-                      {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
-                    </select>
-                    <div style={estilos.label}>Horário (ex: 15:20)</div>
-                    <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />
-                    {erroManual && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroManual}</p>}
-                    <button style={estilos.botao(true)} onClick={salvarAgendamentoManual}>Salvar agendamento</button>
-                  </div>
-                )}
-
-                <p style={{ ...estilos.titulo, marginTop: '20px' }}>AGENDA DO DIA</p>
-                {carregandoAgenda ? (
-                  <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>
-                ) : agendaDoDia.length === 0 ? (
-                  <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
-                    Nenhum agendamento neste dia.
-                  </div>
-                ) : (
-                  agendaDoDia.map((a) => (
-                    <div key={a.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <p style={{ margin: 0, fontWeight: 500, color: OURO }}>{a.horario.slice(0, 5)}</p>
-                        {a.origem === 'dono' && <span style={{ fontSize: '10px', color: '#6b6b6b' }}>manual</span>}
-                      </div>
-                      <p style={{ margin: '4px 0 0', fontSize: '14px' }}>{a.clientes?.nome || 'Cliente'}</p>
-                      <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{a.servicos?.nome} · {a.barbeiros?.nome || 'Sem preferência'}</p>
-                      {a.clientes?.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
+                {mostrarFinanceiro ? (
+                  <>
+                    {/* Seletor de período */}
+                    <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+                      {[['dia', 'Hoje'], ['mes', 'Mês']].map(([id, label]) => (
+                        <div key={id} onClick={() => setFinPeriodo(id)}
+                          style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', border: finPeriodo === id ? '1px solid #C9A227' : '1px solid #333', background: finPeriodo === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finPeriodo === id ? OURO : '#8a8a8a' }}>{label}</div>
+                      ))}
                     </div>
-                  ))
-                )}
 
-                <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
-                  {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
-                </button>
+                    {/* Total geral */}
+                    <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '12px', padding: '18px', marginBottom: '14px', background: 'rgba(201,162,39,0.05)' }}>
+                      <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0, letterSpacing: '1px' }}>ENTRADAS {finPeriodo === 'dia' ? 'DE HOJE' : 'DO MÊS'}</p>
+                      <p style={{ fontSize: '32px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalGeral)}</p>
+                    </div>
 
-                {mostrarMembros && (
-                  <div style={{ marginTop: '8px' }}>
-                    {membrosClub.length === 0 ? (
-                      <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
-                        Nenhum membro no Club ainda.
-                      </div>
-                    ) : (
+                    {/* Abas */}
+                    <div style={{ display: 'flex', gap: '4px', marginBottom: '14px' }}>
+                      {[['geral', 'Geral'], ['barbeiro', 'Barbeiros'], ['club', 'Club'], ['produtos', 'Produtos']].map(([id, label]) => (
+                        <div key={id} onClick={() => setFinAba(id)}
+                          style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', border: finAba === id ? '1px solid #C9A227' : '1px solid #333', background: finAba === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finAba === id ? OURO : '#8a8a8a' }}>{label}</div>
+                      ))}
+                    </div>
+
+                    {/* Conteúdo das abas */}
+                    {finAba === 'geral' && (
                       <>
-                        <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>{membrosClub.length} membro(s)</p>
-                        {membrosClub.map((m) => (
-                          <div key={m.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                              <div>
-                                <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>
-                                  {barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}
-                                </p>
-                                {m.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{m.telefone}</p>}
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+                          <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
+                            <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Serviços</p>
+                            <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalServicos)}</p>
+                          </div>
+                          <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
+                            <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Produtos</p>
+                            <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalProdutos)}</p>
+                          </div>
+                          <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
+                            <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Club</p>
+                            <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalClub)}</p>
+                          </div>
+                        </div>
+                        <p style={estilos.titulo}>ÚLTIMAS MOVIMENTAÇÕES</p>
+                        {movs.length === 0 ? (
+                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhuma entrada nesse período.</div>
+                        ) : (
+                          movs.map((m) => (
+                            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                              <div style={{ flex: 1 }}>
+                                <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')} · {m.categoria}</p>
                               </div>
-                              <span onClick={() => { if (confirm('Remover ' + m.nome + ' do Club?')) removerMembro(m.id); }}
-                                style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer', whiteSpace: 'nowrap' }}>remover</span>
+                              <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
+                              <span onClick={() => { if (confirm('Apagar esta movimentação?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
                             </div>
+                          ))
+                        )}
+                      </>
+                    )}
+
+                    {finAba === 'barbeiro' && (
+                      <>
+                        <p style={estilos.titulo}>FATURAMENTO POR BARBEIRO (SERVIÇOS)</p>
+                        {Object.keys(porBarbeiro).length === 0 ? (
+                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhum atendimento pago nesse período.</div>
+                        ) : (
+                          Object.entries(porBarbeiro).map(([nome, total]) => (
+                            <div key={nome} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                              <span style={{ fontSize: '14px' }}>{nome}</span>
+                              <span style={{ color: OURO, fontWeight: 600, fontSize: '15px' }}>R$ {formatarReal(total)}</span>
+                            </div>
+                          ))
+                        )}
+                      </>
+                    )}
+
+                    {finAba === 'club' && (
+                      <>
+                        <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '16px', marginBottom: '14px' }}>
+                          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0 }}>RECEITA DO CLUB {finPeriodo === 'dia' ? '(HOJE)' : '(MÊS)'}</p>
+                          <p style={{ fontSize: '24px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalClub)}</p>
+                        </div>
+                        <button style={estilos.botaoSec} onClick={() => setMostrarFormClubPag(!mostrarFormClubPag)}>
+                          {mostrarFormClubPag ? 'Cancelar' : '+ Lançar pagamento do Club'}
+                        </button>
+                        {mostrarFormClubPag && (
+                          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                            <div style={estilos.label}>Descrição (opcional)</div>
+                            <input style={estilos.input} value={clubPagDesc} onChange={(e) => setClubPagDesc(e.target.value)} placeholder="Ex: Assinatura João - Corte Club" />
+                            <div style={estilos.label}>Valor recebido (R$)</div>
+                            <input style={estilos.input} value={clubPagValor} onChange={(e) => setClubPagValor(e.target.value)} placeholder="Ex: 99,99" inputMode="decimal" />
+                            <button style={estilos.botao(true)} onClick={lancarPagamentoClub}>Lançar</button>
+                          </div>
+                        )}
+                        {movs.filter((m) => m.categoria === 'club').map((m) => (
+                          <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                            <div style={{ flex: 1 }}>
+                              <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                              <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+                            </div>
+                            <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
+                            <span onClick={() => { if (confirm('Apagar?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
                           </div>
                         ))}
                       </>
                     )}
-                  </div>
+
+                    {finAba === 'produtos' && (
+                      <>
+                        <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '16px', marginBottom: '14px' }}>
+                          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0 }}>VENDAS DE PRODUTOS {finPeriodo === 'dia' ? '(HOJE)' : '(MÊS)'}</p>
+                          <p style={{ fontSize: '24px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalProdutos)}</p>
+                        </div>
+                        {movs.filter((m) => m.categoria === 'produto').length === 0 ? (
+                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhuma venda nesse período.</div>
+                        ) : (
+                          movs.filter((m) => m.categoria === 'produto').map((m) => (
+                            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                              <div style={{ flex: 1 }}>
+                                <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+                              </div>
+                              <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
+                              <span onClick={() => { if (confirm('Apagar?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
+                            </div>
+                          ))
+                        )}
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                      <span onClick={() => mudarDiaDono(-1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>‹</span>
+                      <span style={{ fontSize: '14px', textTransform: 'capitalize', textAlign: 'center' }}>
+                        {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+                      </span>
+                      <span onClick={() => mudarDiaDono(1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>›</span>
+                    </div>
+
+                    {bloqueiosDoDia.map((b) => (
+                      <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(163,61,61,0.12)', border: '1px solid #a33d3d', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '12px', color: '#e07a7a' }}>
+                          {b.barbeiro_id === null ? 'Barbearia fechada' : 'Fechado: ' + (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome || 'barbeiro')}
+                          {b.motivo ? ' · ' + b.motivo : ''}
+                        </span>
+                        <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>
+                      </div>
+                    ))}
+
+                    <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+                      {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+                    </button>
+
+                    {mostrarFormBloqueio && (
+                      <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                        <div style={estilos.label}>Fechar para</div>
+                        <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
+                          <option value="todos">Barbearia toda</option>
+                          {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
+                        </select>
+                        <div style={estilos.label}>Motivo (opcional)</div>
+                        <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
+                        <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
+                      </div>
+                    )}
+
+                    <button style={estilos.botaoSec} onClick={() => { setMostrarFormManual(!mostrarFormManual); setMostrarFormBloqueio(false); }}>
+                      {mostrarFormManual ? 'Cancelar' : '+ Agendar para cliente'}
+                    </button>
+
+                    {mostrarFormManual && (
+                      <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                        <div style={estilos.label}>Nome do cliente</div>
+                        <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
+                        <div style={estilos.label}>WhatsApp (opcional)</div>
+                        <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+                        <div style={estilos.label}>Serviço</div>
+                        <select style={estilos.input} value={manualServico} onChange={(e) => setManualServico(e.target.value)}>
+                          <option value="">Escolha</option>
+                          {servicos.map((s) => (<option key={s.id} value={s.id}>{s.nome}</option>))}
+                        </select>
+                        <div style={estilos.label}>Barbeiro (opcional)</div>
+                        <select style={estilos.input} value={manualBarbeiro} onChange={(e) => setManualBarbeiro(e.target.value)}>
+                          <option value="">Sem preferência</option>
+                          {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
+                        </select>
+                        <div style={estilos.label}>Horário (ex: 15:20)</div>
+                        <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />
+                        {erroManual && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroManual}</p>}
+                        <button style={estilos.botao(true)} onClick={salvarAgendamentoManual}>Salvar agendamento</button>
+                      </div>
+                    )}
+
+                    <p style={{ ...estilos.titulo, marginTop: '20px' }}>AGENDA DO DIA</p>
+                    {carregandoAgenda ? (
+                      <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>
+                    ) : agendaDoDia.length === 0 ? (
+                      <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
+                        Nenhum agendamento neste dia.
+                      </div>
+                    ) : (
+                      agendaDoDia.map((a) => {
+                        const pago = agsPagos.includes(a.id);
+                        return (
+                          <div key={a.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <p style={{ margin: 0, fontWeight: 500, color: OURO }}>{a.horario.slice(0, 5)}</p>
+                              {a.origem === 'dono' && <span style={{ fontSize: '10px', color: '#6b6b6b' }}>manual</span>}
+                            </div>
+                            <p style={{ margin: '4px 0 0', fontSize: '14px' }}>{a.clientes?.nome || 'Cliente'}</p>
+                            <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{a.servicos?.nome} · {a.barbeiros?.nome || 'Sem preferência'}</p>
+                            {a.clientes?.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
+                            {pago ? (
+                              <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago</p>
+                            ) : pagamentoAg?.id === a.id ? (
+                              <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                                <div style={estilos.label}>Valor pago (R$)</div>
+                                <input style={estilos.input} value={pagamentoValor} onChange={(e) => setPagamentoValor(e.target.value)} inputMode="decimal" />
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarPagamento}>Confirmar</button>
+                                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagamentoAg(null)}>Cancelar</button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirPagamento(a)}>Marcar como pago</button>
+                            )}
+                          </div>
+                        );
+                      })
+                    )}
+
+                    {/* ===== MEMBROS DO CLUB ===== */}
+                    <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
+                      {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
+                    </button>
+
+                    {mostrarMembros && (
+                      <div style={{ marginTop: '8px' }}>
+                        {membrosClub.length === 0 ? (
+                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+                            Nenhum membro no Club ainda.
+                          </div>
+                        ) : (
+                          <>
+                            <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>{membrosClub.length} membro(s)</p>
+                            {membrosClub.map((m) => (
+                              <div key={m.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                  <div>
+                                    <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
+                                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
+                                    <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>
+                                      {barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}
+                                    </p>
+                                    {m.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{m.telefone}</p>}
+                                  </div>
+                                  <span onClick={() => { if (confirm('Remover ' + m.nome + ' do Club?')) removerMembro(m.id); }}
+                                    style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer', whiteSpace: 'nowrap' }}>remover</span>
+                                </div>
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* ===== PRODUTOS ===== */}
+                    <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
+                      {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
+                    </button>
+
+                    {mostrarProdutos && (
+                      <div style={{ marginTop: '8px' }}>
+                        <button style={estilos.botaoSec} onClick={() => { if (mostrarFormProduto) { setMostrarFormProduto(false); } else { abrirFormNovoProduto(); } }}>
+                          {mostrarFormProduto ? 'Cancelar' : '+ Novo produto'}
+                        </button>
+
+                        {mostrarFormProduto && (
+                          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                            <div style={estilos.label}>Nome do produto</div>
+                            <input style={estilos.input} value={prodNome} onChange={(e) => setProdNome(e.target.value)} placeholder="Ex: Pomada modeladora" />
+                            <div style={estilos.label}>Preço (R$)</div>
+                            <input style={estilos.input} value={prodPreco} onChange={(e) => setProdPreco(e.target.value)} placeholder="Ex: 35,00" inputMode="decimal" />
+                            <div style={estilos.label}>Quantidade em estoque</div>
+                            <input style={estilos.input} value={prodEstoque} onChange={(e) => setProdEstoque(e.target.value)} placeholder="Ex: 10" inputMode="numeric" />
+                            {erroProduto && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroProduto}</p>}
+                            <button style={estilos.botao(true)} onClick={salvarProduto}>{prodEditandoId ? 'Salvar alterações' : 'Adicionar produto'}</button>
+                          </div>
+                        )}
+
+                        {produtos.length === 0 ? (
+                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+                            Nenhum produto cadastrado ainda.
+                          </div>
+                        ) : (
+                          produtos.map((p) => (
+                            <div key={p.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                <div style={{ flex: 1 }}>
+                                  <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{p.nome}</p>
+                                  <p style={{ margin: '2px 0 0', fontSize: '13px', color: OURO }}>R$ {formatarReal(p.preco)}</p>
+                                  <p style={{ margin: '2px 0 0', fontSize: '11px', color: p.estoque <= 0 ? '#e07a7a' : '#8a8a8a' }}>
+                                    {p.estoque <= 0 ? 'Sem estoque' : `${p.estoque} em estoque`}
+                                  </p>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
+                                  <span onClick={() => abrirFormEditarProduto(p)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>editar</span>
+                                  <span onClick={() => { if (confirm('Remover ' + p.nome + '?')) removerProduto(p.id); }} style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer' }}>remover</span>
+                                </div>
+                              </div>
+                              {vendaProduto?.id === p.id ? (
+                                <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                                  <div style={estilos.label}>Quantidade vendida</div>
+                                  <input style={estilos.input} value={vendaQtd} onChange={(e) => setVendaQtd(e.target.value)} inputMode="numeric" />
+                                  <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 10px' }}>Total: R$ {formatarReal((parseInt(vendaQtd) || 0) * Number(p.preco))}</p>
+                                  {erroVenda && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroVenda}</p>}
+                                  <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarVenda}>Confirmar venda</button>
+                                    <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setVendaProduto(null)}>Cancelar</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                p.estoque > 0 && <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirVenda(p)}>Vender / dar baixa</button>
+                              )}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}
