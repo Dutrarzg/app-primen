@@ -86,6 +86,14 @@ function App() {
   const [modo, setModo] = useState('cliente');
   const [mostrarAbertura, setMostrarAbertura] = useState(true);
 
+  // Detecta tamanho da tela (PC vs celular) — só afeta o layout da área da equipe
+  const [ehTelaGrande, setEhTelaGrande] = useState(typeof window !== 'undefined' && window.innerWidth >= 900);
+  useEffect(() => {
+    function aoRedimensionar() { setEhTelaGrande(window.innerWidth >= 900); }
+    window.addEventListener('resize', aoRedimensionar);
+    return () => window.removeEventListener('resize', aoRedimensionar);
+  }, []);
+
   const [tela, setTela] = useState('login');
   const [clienteLogado, setClienteLogado] = useState(null);
   const [loginTel, setLoginTel] = useState('');
@@ -118,11 +126,10 @@ function App() {
   const [vagasUsadas, setVagasUsadas] = useState({});
   const [processandoClub, setProcessandoClub] = useState(false);
 
-  // ===== LOGIN DA EQUIPE =====
   const [equipeUsuario, setEquipeUsuario] = useState('');
   const [equipeSenha, setEquipeSenha] = useState('');
   const [erroEquipe, setErroEquipe] = useState('');
-  const [barbeiroLogado, setBarbeiroLogado] = useState(null); // { id, nome, nivel, ... }
+  const [barbeiroLogado, setBarbeiroLogado] = useState(null);
   const ehAdmin = barbeiroLogado?.nivel === 'admin';
 
   const [dataDono, setDataDono] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()));
@@ -186,10 +193,8 @@ function App() {
     async function checarSessao() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
-        // É um barbeiro (equipe)?
         const { data: barb } = await supabase.from('barbeiros').select('*').eq('auth_id', session.user.id).maybeSingle();
         if (barb) { setBarbeiroLogado(barb); setModo('dono'); carregarAgenda(new Date(), barb); return; }
-        // Senão, é cliente
         const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', session.user.id).maybeSingle();
         if (cli) { setClienteLogado(cli); setTela('menu'); }
       }
@@ -279,7 +284,6 @@ function App() {
     setTela('login');
   }
 
-  // ===== LOGIN DA EQUIPE =====
   async function entrarComoEquipe() {
     setErroEquipe('');
     if (!equipeUsuario.trim() || !equipeSenha.trim()) { setErroEquipe('Preencha usuário e senha.'); return; }
@@ -292,6 +296,7 @@ function App() {
     setEquipeUsuario(''); setEquipeSenha('');
     setModo('dono');
     carregarAgenda(dataDono, barb);
+    carregarFinanceiro(barb);
   }
 
   async function sairDaEquipe() {
@@ -372,7 +377,6 @@ function App() {
     window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
   }
 
-  // Recebe o barbeiro pra filtrar quando é comum (admin vê tudo)
   async function carregarAgenda(data, barbRef) {
     const barb = barbRef || barbeiroLogado;
     setCarregandoAgenda(true);
@@ -381,7 +385,6 @@ function App() {
       .from('agendamentos')
       .select('id, horario, status, origem, servico_id, barbeiro_id, clientes(nome, telefone), servicos(nome, preco), barbeiros(nome)')
       .eq('data', dataISO).neq('status', 'cancelado');
-    // Se for barbeiro comum, filtra só os dele
     if (barb && barb.nivel !== 'admin') query = query.eq('barbeiro_id', barb.id);
     const { data: ags } = await query.order('horario', { ascending: true });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
@@ -470,6 +473,7 @@ function App() {
     });
     setVendaProduto(null);
     carregarProdutos();
+    carregarFinanceiro();
   }
 
   function abrirPagamento(ag) {
@@ -486,9 +490,9 @@ function App() {
     });
     setPagamentoAg(null);
     carregarAgenda(dataDono);
+    carregarFinanceiro();
   }
 
-  // Recebe o barbeiro pra filtrar o financeiro quando é comum
   async function carregarFinanceiro(barbRef) {
     const barb = barbRef || barbeiroLogado;
     const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
@@ -496,7 +500,6 @@ function App() {
     let query = supabase.from('movimentacoes')
       .select('*, barbeiros(nome)')
       .gte('data', dataParaISO(ini)).lte('data', dataParaISO(fim));
-    // Barbeiro comum: só as movimentações de serviço dele
     if (barb && barb.nivel !== 'admin') {
       query = query.eq('categoria', 'servico').eq('barbeiro_id', barb.id);
     }
@@ -558,7 +561,6 @@ function App() {
     const { data: cliente, error: erroCli } = await supabase.from('clientes')
       .insert({ nome: manualNome.trim(), telefone: manualTel.trim() || ('manual-' + Date.now()) }).select().single();
     if (erroCli) { setErroManual('Erro ao cadastrar cliente.'); return; }
-    // Se for barbeiro comum, o agendamento é sempre pra ele mesmo
     const barbId = ehAdmin ? (manualBarbeiro || null) : barbeiroLogado.id;
     const { error: erroAg } = await supabase.from('agendamentos').insert({
       cliente_id: cliente.id, barbeiro_id: barbId, servico_id: manualServico,
@@ -573,6 +575,7 @@ function App() {
   const estilos = {
     tela: { background: '#0d0d0d', color: '#f2f2f2', minHeight: '100vh', fontFamily: 'sans-serif', padding: '24px' },
     conteudo: { maxWidth: '400px', margin: '0 auto' },
+    conteudoLargo: { maxWidth: '1100px', margin: '0 auto' },
     titulo: { color: '#8a8a8a', fontSize: '13px', letterSpacing: '1px', marginBottom: '12px' },
     voltar: { display: 'flex', alignItems: 'center', gap: '8px', color: OURO, fontSize: '13px', cursor: 'pointer', marginBottom: '16px' },
     botao: (ativo) => ({ width: '100%', marginTop: '14px', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 500, cursor: ativo ? 'pointer' : 'default', opacity: ativo ? 1 : 0.4 }),
@@ -593,6 +596,376 @@ function App() {
     porBarbeiro[nome] = (porBarbeiro[nome] || 0) + Number(m.valor);
   });
 
+  // ===== BLOCOS REUTILIZÁVEIS DA ÁREA DA EQUIPE =====
+  // (definidos como funções que retornam JSX, pra usar tanto no layout de celular quanto de PC)
+
+  function BlocoAgenda() {
+    return (
+      <>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <span onClick={() => mudarDiaDono(-1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>‹</span>
+          <span style={{ fontSize: '14px', textTransform: 'capitalize', textAlign: 'center' }}>
+            {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+          </span>
+          <span onClick={() => mudarDiaDono(1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>›</span>
+        </div>
+
+        {bloqueiosDoDia.map((b) => (
+          <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(163,61,61,0.12)', border: '1px solid #a33d3d', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+            <span style={{ fontSize: '12px', color: '#e07a7a' }}>
+              {b.barbeiro_id === null ? 'Barbearia fechada' : 'Fechado: ' + (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome || 'barbeiro')}
+              {b.motivo ? ' · ' + b.motivo : ''}
+            </span>
+            {ehAdmin && <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>}
+          </div>
+        ))}
+
+        <button style={estilos.botaoSec} onClick={() => { setMostrarFormManual(!mostrarFormManual); setMostrarFormBloqueio(false); }}>
+          {mostrarFormManual ? 'Cancelar' : '+ Agendar para cliente'}
+        </button>
+
+        {mostrarFormManual && (
+          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+            <div style={estilos.label}>Nome do cliente</div>
+            <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
+            <div style={estilos.label}>WhatsApp (opcional)</div>
+            <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+            <div style={estilos.label}>Serviço</div>
+            <select style={estilos.input} value={manualServico} onChange={(e) => setManualServico(e.target.value)}>
+              <option value="">Escolha</option>
+              {servicos.map((s) => (<option key={s.id} value={s.id}>{s.nome}</option>))}
+            </select>
+            {ehAdmin && (
+              <>
+                <div style={estilos.label}>Barbeiro (opcional)</div>
+                <select style={estilos.input} value={manualBarbeiro} onChange={(e) => setManualBarbeiro(e.target.value)}>
+                  <option value="">Sem preferência</option>
+                  {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
+                </select>
+              </>
+            )}
+            <div style={estilos.label}>Horário (ex: 15:20)</div>
+            <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />
+            {erroManual && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroManual}</p>}
+            <button style={estilos.botao(true)} onClick={salvarAgendamentoManual}>Salvar agendamento</button>
+          </div>
+        )}
+
+        <p style={{ ...estilos.titulo, marginTop: '16px' }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA DO DIA'}</p>
+        {carregandoAgenda ? (
+          <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>
+        ) : agendaDoDia.length === 0 ? (
+          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
+            Nenhum agendamento neste dia.
+          </div>
+        ) : (
+          agendaDoDia.map((a) => {
+            const pago = agsPagos.includes(a.id);
+            return (
+              <div key={a.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <p style={{ margin: 0, fontWeight: 500, color: OURO }}>{a.horario.slice(0, 5)}</p>
+                  {a.origem === 'dono' && <span style={{ fontSize: '10px', color: '#6b6b6b' }}>manual</span>}
+                </div>
+                <p style={{ margin: '4px 0 0', fontSize: '14px' }}>{a.clientes?.nome || 'Cliente'}</p>
+                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{a.servicos?.nome} · {a.barbeiros?.nome || 'Sem preferência'}</p>
+                {a.clientes?.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
+                {pago ? (
+                  <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago</p>
+                ) : pagamentoAg?.id === a.id ? (
+                  <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                    <div style={estilos.label}>Valor pago (R$)</div>
+                    <input style={estilos.input} value={pagamentoValor} onChange={(e) => setPagamentoValor(e.target.value)} inputMode="decimal" />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarPagamento}>Confirmar</button>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagamentoAg(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirPagamento(a)}>Marcar como pago</button>
+                )}
+              </div>
+            );
+          })
+        )}
+      </>
+    );
+  }
+
+  function BlocoFinanceiro() {
+    return (
+      <>
+        <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+          {[['dia', 'Hoje'], ['mes', 'Mês']].map(([id, label]) => (
+            <div key={id} onClick={() => setFinPeriodo(id)}
+              style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', border: finPeriodo === id ? '1px solid #C9A227' : '1px solid #333', background: finPeriodo === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finPeriodo === id ? OURO : '#8a8a8a' }}>{label}</div>
+          ))}
+        </div>
+
+        <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '12px', padding: '18px', marginBottom: '14px', background: 'rgba(201,162,39,0.05)' }}>
+          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0, letterSpacing: '1px' }}>{ehAdmin ? 'ENTRADAS' : 'MEU FATURAMENTO'} {finPeriodo === 'dia' ? 'DE HOJE' : 'DO MÊS'}</p>
+          <p style={{ fontSize: '32px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(ehAdmin ? totalGeral : totalServicos)}</p>
+        </div>
+
+        {ehAdmin && (
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '14px' }}>
+            {[['geral', 'Geral'], ['barbeiro', 'Barbeiros'], ['club', 'Club'], ['produtos', 'Produtos']].map(([id, label]) => (
+              <div key={id} onClick={() => setFinAba(id)}
+                style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', border: finAba === id ? '1px solid #C9A227' : '1px solid #333', background: finAba === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finAba === id ? OURO : '#8a8a8a' }}>{label}</div>
+            ))}
+          </div>
+        )}
+
+        {!ehAdmin && (
+          <>
+            <p style={estilos.titulo}>MEUS ATENDIMENTOS PAGOS</p>
+            {movs.length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhum atendimento pago nesse período.</div>
+            ) : (
+              movs.map((m) => (
+                <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                    <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+                  </div>
+                  <span style={{ color: OURO, fontWeight: 500, fontSize: '13px' }}>R$ {formatarReal(m.valor)}</span>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {ehAdmin && finAba === 'geral' && (
+          <>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+              <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
+                <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Serviços</p>
+                <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalServicos)}</p>
+              </div>
+              <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
+                <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Produtos</p>
+                <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalProdutos)}</p>
+              </div>
+              <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
+                <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Club</p>
+                <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalClub)}</p>
+              </div>
+            </div>
+            <p style={estilos.titulo}>ÚLTIMAS MOVIMENTAÇÕES</p>
+            {movs.length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhuma entrada nesse período.</div>
+            ) : (
+              movs.map((m) => (
+                <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                    <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')} · {m.categoria}</p>
+                  </div>
+                  <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
+                  <span onClick={() => { if (confirm('Apagar esta movimentação?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {ehAdmin && finAba === 'barbeiro' && (
+          <>
+            <p style={estilos.titulo}>FATURAMENTO POR BARBEIRO (SERVIÇOS)</p>
+            {Object.keys(porBarbeiro).length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhum atendimento pago nesse período.</div>
+            ) : (
+              Object.entries(porBarbeiro).map(([nome, total]) => (
+                <div key={nome} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                  <span style={{ fontSize: '14px' }}>{nome}</span>
+                  <span style={{ color: OURO, fontWeight: 600, fontSize: '15px' }}>R$ {formatarReal(total)}</span>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
+        {ehAdmin && finAba === 'club' && (
+          <>
+            <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '16px', marginBottom: '14px' }}>
+              <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0 }}>RECEITA DO CLUB {finPeriodo === 'dia' ? '(HOJE)' : '(MÊS)'}</p>
+              <p style={{ fontSize: '24px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalClub)}</p>
+            </div>
+            <button style={estilos.botaoSec} onClick={() => setMostrarFormClubPag(!mostrarFormClubPag)}>
+              {mostrarFormClubPag ? 'Cancelar' : '+ Lançar pagamento do Club'}
+            </button>
+            {mostrarFormClubPag && (
+              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                <div style={estilos.label}>Descrição (opcional)</div>
+                <input style={estilos.input} value={clubPagDesc} onChange={(e) => setClubPagDesc(e.target.value)} placeholder="Ex: Assinatura João - Corte Club" />
+                <div style={estilos.label}>Valor recebido (R$)</div>
+                <input style={estilos.input} value={clubPagValor} onChange={(e) => setClubPagValor(e.target.value)} placeholder="Ex: 99,99" inputMode="decimal" />
+                <button style={estilos.botao(true)} onClick={lancarPagamentoClub}>Lançar</button>
+              </div>
+            )}
+            {movs.filter((m) => m.categoria === 'club').map((m) => (
+              <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                <div style={{ flex: 1 }}>
+                  <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+                </div>
+                <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
+                <span onClick={() => { if (confirm('Apagar?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
+              </div>
+            ))}
+          </>
+        )}
+
+        {ehAdmin && finAba === 'produtos' && (
+          <>
+            <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '16px', marginBottom: '14px' }}>
+              <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0 }}>VENDAS DE PRODUTOS {finPeriodo === 'dia' ? '(HOJE)' : '(MÊS)'}</p>
+              <p style={{ fontSize: '24px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalProdutos)}</p>
+            </div>
+            {movs.filter((m) => m.categoria === 'produto').length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhuma venda nesse período.</div>
+            ) : (
+              movs.filter((m) => m.categoria === 'produto').map((m) => (
+                <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
+                    <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
+                  </div>
+                  <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
+                  <span onClick={() => { if (confirm('Apagar?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
+                </div>
+              ))
+            )}
+          </>
+        )}
+      </>
+    );
+  }
+
+  function BlocoAdminExtra() {
+    if (!ehAdmin) return null;
+    return (
+      <>
+        {ehAdmin && (
+          <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+            {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+          </button>
+        )}
+        {mostrarFormBloqueio && (
+          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+            <div style={estilos.label}>Fechar para</div>
+            <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
+              <option value="todos">Barbearia toda</option>
+              {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
+            </select>
+            <div style={estilos.label}>Motivo (opcional)</div>
+            <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
+            <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
+          </div>
+        )}
+
+        <button style={estilos.botaoSec} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
+          {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
+        </button>
+
+        {mostrarMembros && (
+          <div style={{ marginTop: '8px' }}>
+            {membrosClub.length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+                Nenhum membro no Club ainda.
+              </div>
+            ) : (
+              <>
+                <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>{membrosClub.length} membro(s)</p>
+                {membrosClub.map((m) => (
+                  <div key={m.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div>
+                        <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
+                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
+                        <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>
+                          {barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}
+                        </p>
+                        {m.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{m.telefone}</p>}
+                      </div>
+                      <span onClick={() => { if (confirm('Remover ' + m.nome + ' do Club?')) removerMembro(m.id); }}
+                        style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer', whiteSpace: 'nowrap' }}>remover</span>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
+          {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
+        </button>
+
+        {mostrarProdutos && (
+          <div style={{ marginTop: '8px' }}>
+            <button style={estilos.botaoSec} onClick={() => { if (mostrarFormProduto) { setMostrarFormProduto(false); } else { abrirFormNovoProduto(); } }}>
+              {mostrarFormProduto ? 'Cancelar' : '+ Novo produto'}
+            </button>
+
+            {mostrarFormProduto && (
+              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                <div style={estilos.label}>Nome do produto</div>
+                <input style={estilos.input} value={prodNome} onChange={(e) => setProdNome(e.target.value)} placeholder="Ex: Pomada modeladora" />
+                <div style={estilos.label}>Preço (R$)</div>
+                <input style={estilos.input} value={prodPreco} onChange={(e) => setProdPreco(e.target.value)} placeholder="Ex: 35,00" inputMode="decimal" />
+                <div style={estilos.label}>Quantidade em estoque</div>
+                <input style={estilos.input} value={prodEstoque} onChange={(e) => setProdEstoque(e.target.value)} placeholder="Ex: 10" inputMode="numeric" />
+                {erroProduto && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroProduto}</p>}
+                <button style={estilos.botao(true)} onClick={salvarProduto}>{prodEditandoId ? 'Salvar alterações' : 'Adicionar produto'}</button>
+              </div>
+            )}
+
+            {produtos.length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+                Nenhum produto cadastrado ainda.
+              </div>
+            ) : (
+              produtos.map((p) => (
+                <div key={p.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{p.nome}</p>
+                      <p style={{ margin: '2px 0 0', fontSize: '13px', color: OURO }}>R$ {formatarReal(p.preco)}</p>
+                      <p style={{ margin: '2px 0 0', fontSize: '11px', color: p.estoque <= 0 ? '#e07a7a' : '#8a8a8a' }}>
+                        {p.estoque <= 0 ? 'Sem estoque' : `${p.estoque} em estoque`}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
+                      <span onClick={() => abrirFormEditarProduto(p)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>editar</span>
+                      <span onClick={() => { if (confirm('Remover ' + p.nome + '?')) removerProduto(p.id); }} style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer' }}>remover</span>
+                    </div>
+                  </div>
+                  {vendaProduto?.id === p.id ? (
+                    <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                      <div style={estilos.label}>Quantidade vendida</div>
+                      <input style={estilos.input} value={vendaQtd} onChange={(e) => setVendaQtd(e.target.value)} inputMode="numeric" />
+                      <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 10px' }}>Total: R$ {formatarReal((parseInt(vendaQtd) || 0) * Number(p.preco))}</p>
+                      {erroVenda && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroVenda}</p>}
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarVenda}>Confirmar venda</button>
+                        <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setVendaProduto(null)}>Cancelar</button>
+                      </div>
+                    </div>
+                  ) : (
+                    p.estoque > 0 && <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirVenda(p)}>Vender / dar baixa</button>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  const larguraArea = (modo === 'dono' && ehTelaGrande) ? estilos.conteudoLargo : estilos.conteudo;
+
   return (
     <>
       {mostrarAbertura && (
@@ -609,10 +982,10 @@ function App() {
         {carregando ? (
           <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>
         ) : (
-          <div style={estilos.conteudo}>
+          <div style={larguraArea}>
 
             {modo === 'cliente' && (
-              <>
+              <div style={estilos.conteudo}>
                 {tela === 'login' && (
                   <>
                     <p style={estilos.titulo}>ENTRAR</p>
@@ -877,11 +1250,11 @@ function App() {
                     )}
                   </>
                 )}
-              </>
+              </div>
             )}
 
             {modo === 'login-equipe' && (
-              <>
+              <div style={estilos.conteudo}>
                 <div style={estilos.voltar} onClick={() => { setModo('cliente'); setEquipeUsuario(''); setEquipeSenha(''); setErroEquipe(''); }}>← Voltar</div>
                 <p style={estilos.titulo}>ACESSO DA EQUIPE</p>
                 <div style={estilos.label}>Usuário</div>
@@ -890,7 +1263,7 @@ function App() {
                 <input style={estilos.input} type="password" value={equipeSenha} onChange={(e) => setEquipeSenha(e.target.value)} placeholder="Sua senha" />
                 {erroEquipe && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroEquipe}</p>}
                 <button onClick={entrarComoEquipe} style={estilos.botao(true)}>Entrar</button>
-              </>
+              </div>
             )}
 
             {modo === 'dono' && (
@@ -901,369 +1274,42 @@ function App() {
                 </div>
                 <p style={{ fontSize: '13px', color: '#f2f2f2', margin: '0 0 16px' }}>Olá, {barbeiroLogado?.nome?.split(' ')[0]} 👋 {!ehAdmin && <span style={{ fontSize: '11px', color: '#8a8a8a' }}>(acesso da equipe)</span>}</p>
 
-                <button style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '16px' }}
-                  onClick={() => { if (!mostrarFinanceiro) carregarFinanceiro(); setMostrarFinanceiro(!mostrarFinanceiro); }}>
-                  {mostrarFinanceiro ? '← Voltar à agenda' : '💰 Financeiro'}
-                </button>
-
-                {mostrarFinanceiro ? (
+                {ehTelaGrande ? (
+                  // ===== LAYOUT COMPUTADOR: duas colunas =====
                   <>
-                    <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-                      {[['dia', 'Hoje'], ['mes', 'Mês']].map(([id, label]) => (
-                        <div key={id} onClick={() => setFinPeriodo(id)}
-                          style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', border: finPeriodo === id ? '1px solid #C9A227' : '1px solid #333', background: finPeriodo === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finPeriodo === id ? OURO : '#8a8a8a' }}>{label}</div>
-                      ))}
-                    </div>
-
-                    <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '12px', padding: '18px', marginBottom: '14px', background: 'rgba(201,162,39,0.05)' }}>
-                      <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0, letterSpacing: '1px' }}>{ehAdmin ? 'ENTRADAS' : 'MEU FATURAMENTO'} {finPeriodo === 'dia' ? 'DE HOJE' : 'DO MÊS'}</p>
-                      <p style={{ fontSize: '32px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(ehAdmin ? totalGeral : totalServicos)}</p>
-                    </div>
-
-                    {/* Abas: só admin vê todas; comum vê direto a lista dele */}
-                    {ehAdmin && (
-                      <div style={{ display: 'flex', gap: '4px', marginBottom: '14px' }}>
-                        {[['geral', 'Geral'], ['barbeiro', 'Barbeiros'], ['club', 'Club'], ['produtos', 'Produtos']].map(([id, label]) => (
-                          <div key={id} onClick={() => setFinAba(id)}
-                            style={{ flex: 1, textAlign: 'center', padding: '7px 0', borderRadius: '6px', fontSize: '11px', cursor: 'pointer', border: finAba === id ? '1px solid #C9A227' : '1px solid #333', background: finAba === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finAba === id ? OURO : '#8a8a8a' }}>{label}</div>
-                        ))}
+                    <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={estilos.titulo}>AGENDA</p>
+                        <BlocoAgenda />
                       </div>
-                    )}
-
-                    {/* BARBEIRO COMUM: lista simples dos atendimentos dele */}
-                    {!ehAdmin && (
-                      <>
-                        <p style={estilos.titulo}>MEUS ATENDIMENTOS PAGOS</p>
-                        {movs.length === 0 ? (
-                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhum atendimento pago nesse período.</div>
-                        ) : (
-                          movs.map((m) => (
-                            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-                              <div style={{ flex: 1 }}>
-                                <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
-                              </div>
-                              <span style={{ color: OURO, fontWeight: 500, fontSize: '13px' }}>R$ {formatarReal(m.valor)}</span>
-                            </div>
-                          ))
-                        )}
-                      </>
-                    )}
-
-                    {/* ADMIN: abas completas */}
-                    {ehAdmin && finAba === 'geral' && (
-                      <>
-                        <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
-                          <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
-                            <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Serviços</p>
-                            <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalServicos)}</p>
-                          </div>
-                          <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
-                            <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Produtos</p>
-                            <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalProdutos)}</p>
-                          </div>
-                          <div style={{ flex: 1, border: '1px solid #262626', borderRadius: '8px', padding: '10px', textAlign: 'center' }}>
-                            <p style={{ fontSize: '10px', color: '#8a8a8a', margin: 0 }}>Club</p>
-                            <p style={{ fontSize: '14px', color: '#f2f2f2', margin: '4px 0 0', fontWeight: 500 }}>R$ {formatarReal(totalClub)}</p>
-                          </div>
-                        </div>
-                        <p style={estilos.titulo}>ÚLTIMAS MOVIMENTAÇÕES</p>
-                        {movs.length === 0 ? (
-                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhuma entrada nesse período.</div>
-                        ) : (
-                          movs.map((m) => (
-                            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-                              <div style={{ flex: 1 }}>
-                                <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')} · {m.categoria}</p>
-                              </div>
-                              <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
-                              <span onClick={() => { if (confirm('Apagar esta movimentação?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
-                            </div>
-                          ))
-                        )}
-                      </>
-                    )}
-
-                    {ehAdmin && finAba === 'barbeiro' && (
-                      <>
-                        <p style={estilos.titulo}>FATURAMENTO POR BARBEIRO (SERVIÇOS)</p>
-                        {Object.keys(porBarbeiro).length === 0 ? (
-                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhum atendimento pago nesse período.</div>
-                        ) : (
-                          Object.entries(porBarbeiro).map(([nome, total]) => (
-                            <div key={nome} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                              <span style={{ fontSize: '14px' }}>{nome}</span>
-                              <span style={{ color: OURO, fontWeight: 600, fontSize: '15px' }}>R$ {formatarReal(total)}</span>
-                            </div>
-                          ))
-                        )}
-                      </>
-                    )}
-
-                    {ehAdmin && finAba === 'club' && (
-                      <>
-                        <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '16px', marginBottom: '14px' }}>
-                          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0 }}>RECEITA DO CLUB {finPeriodo === 'dia' ? '(HOJE)' : '(MÊS)'}</p>
-                          <p style={{ fontSize: '24px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalClub)}</p>
-                        </div>
-                        <button style={estilos.botaoSec} onClick={() => setMostrarFormClubPag(!mostrarFormClubPag)}>
-                          {mostrarFormClubPag ? 'Cancelar' : '+ Lançar pagamento do Club'}
-                        </button>
-                        {mostrarFormClubPag && (
-                          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                            <div style={estilos.label}>Descrição (opcional)</div>
-                            <input style={estilos.input} value={clubPagDesc} onChange={(e) => setClubPagDesc(e.target.value)} placeholder="Ex: Assinatura João - Corte Club" />
-                            <div style={estilos.label}>Valor recebido (R$)</div>
-                            <input style={estilos.input} value={clubPagValor} onChange={(e) => setClubPagValor(e.target.value)} placeholder="Ex: 99,99" inputMode="decimal" />
-                            <button style={estilos.botao(true)} onClick={lancarPagamentoClub}>Lançar</button>
-                          </div>
-                        )}
-                        {movs.filter((m) => m.categoria === 'club').map((m) => (
-                          <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-                            <div style={{ flex: 1 }}>
-                              <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
-                              <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
-                            </div>
-                            <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
-                            <span onClick={() => { if (confirm('Apagar?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
-                          </div>
-                        ))}
-                      </>
-                    )}
-
-                    {ehAdmin && finAba === 'produtos' && (
-                      <>
-                        <div style={{ textAlign: 'center', border: '1px solid #262626', borderRadius: '12px', padding: '16px', marginBottom: '14px' }}>
-                          <p style={{ fontSize: '11px', color: '#8a8a8a', margin: 0 }}>VENDAS DE PRODUTOS {finPeriodo === 'dia' ? '(HOJE)' : '(MÊS)'}</p>
-                          <p style={{ fontSize: '24px', fontWeight: 700, color: OURO, margin: '6px 0 0' }}>R$ {formatarReal(totalProdutos)}</p>
-                        </div>
-                        {movs.filter((m) => m.categoria === 'produto').length === 0 ? (
-                          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>Nenhuma venda nesse período.</div>
-                        ) : (
-                          movs.filter((m) => m.categoria === 'produto').map((m) => (
-                            <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-                              <div style={{ flex: 1 }}>
-                                <p style={{ margin: 0, fontSize: '13px' }}>{m.descricao}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#6b6b6b' }}>{new Date(m.data + 'T12:00:00').toLocaleDateString('pt-BR')}</p>
-                              </div>
-                              <span style={{ color: OURO, fontWeight: 500, fontSize: '13px', marginRight: '8px' }}>R$ {formatarReal(m.valor)}</span>
-                              <span onClick={() => { if (confirm('Apagar?')) removerMovimentacao(m.id); }} style={{ fontSize: '10px', color: '#e07a7a', cursor: 'pointer' }}>×</span>
-                            </div>
-                          ))
-                        )}
-                      </>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={estilos.titulo}>FINANCEIRO</p>
+                        <BlocoFinanceiro />
+                      </div>
+                    </div>
+                    {ehAdmin && (
+                      <div style={{ marginTop: '24px', borderTop: '1px solid #262626', paddingTop: '20px' }}>
+                        <p style={estilos.titulo}>GESTÃO</p>
+                        <BlocoAdminExtra />
+                      </div>
                     )}
                   </>
                 ) : (
+                  // ===== LAYOUT CELULAR: com botão de alternar (como era) =====
                   <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                      <span onClick={() => mudarDiaDono(-1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>‹</span>
-                      <span style={{ fontSize: '14px', textTransform: 'capitalize', textAlign: 'center' }}>
-                        {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-                      </span>
-                      <span onClick={() => mudarDiaDono(1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>›</span>
-                    </div>
-
-                    {bloqueiosDoDia.map((b) => (
-                      <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(163,61,61,0.12)', border: '1px solid #a33d3d', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '12px', color: '#e07a7a' }}>
-                          {b.barbeiro_id === null ? 'Barbearia fechada' : 'Fechado: ' + (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome || 'barbeiro')}
-                          {b.motivo ? ' · ' + b.motivo : ''}
-                        </span>
-                        {ehAdmin && <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>}
-                      </div>
-                    ))}
-
-                    {ehAdmin && (
-                      <>
-                        <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
-                          {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
-                        </button>
-
-                        {mostrarFormBloqueio && (
-                          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                            <div style={estilos.label}>Fechar para</div>
-                            <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
-                              <option value="todos">Barbearia toda</option>
-                              {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
-                            </select>
-                            <div style={estilos.label}>Motivo (opcional)</div>
-                            <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
-                            <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    <button style={estilos.botaoSec} onClick={() => { setMostrarFormManual(!mostrarFormManual); setMostrarFormBloqueio(false); }}>
-                      {mostrarFormManual ? 'Cancelar' : '+ Agendar para cliente'}
+                    <button style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '16px' }}
+                      onClick={() => { if (!mostrarFinanceiro) carregarFinanceiro(); setMostrarFinanceiro(!mostrarFinanceiro); }}>
+                      {mostrarFinanceiro ? '← Voltar à agenda' : '💰 Financeiro'}
                     </button>
 
-                    {mostrarFormManual && (
-                      <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                        <div style={estilos.label}>Nome do cliente</div>
-                        <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
-                        <div style={estilos.label}>WhatsApp (opcional)</div>
-                        <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
-                        <div style={estilos.label}>Serviço</div>
-                        <select style={estilos.input} value={manualServico} onChange={(e) => setManualServico(e.target.value)}>
-                          <option value="">Escolha</option>
-                          {servicos.map((s) => (<option key={s.id} value={s.id}>{s.nome}</option>))}
-                        </select>
-                        {ehAdmin && (
-                          <>
-                            <div style={estilos.label}>Barbeiro (opcional)</div>
-                            <select style={estilos.input} value={manualBarbeiro} onChange={(e) => setManualBarbeiro(e.target.value)}>
-                              <option value="">Sem preferência</option>
-                              {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
-                            </select>
-                          </>
-                        )}
-                        <div style={estilos.label}>Horário (ex: 15:20)</div>
-                        <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />
-                        {erroManual && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroManual}</p>}
-                        <button style={estilos.botao(true)} onClick={salvarAgendamentoManual}>Salvar agendamento</button>
-                      </div>
-                    )}
-
-                    <p style={{ ...estilos.titulo, marginTop: '20px' }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA DO DIA'}</p>
-                    {carregandoAgenda ? (
-                      <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>
-                    ) : agendaDoDia.length === 0 ? (
-                      <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
-                        Nenhum agendamento neste dia.
-                      </div>
+                    {mostrarFinanceiro ? (
+                      <BlocoFinanceiro />
                     ) : (
-                      agendaDoDia.map((a) => {
-                        const pago = agsPagos.includes(a.id);
-                        return (
-                          <div key={a.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <p style={{ margin: 0, fontWeight: 500, color: OURO }}>{a.horario.slice(0, 5)}</p>
-                              {a.origem === 'dono' && <span style={{ fontSize: '10px', color: '#6b6b6b' }}>manual</span>}
-                            </div>
-                            <p style={{ margin: '4px 0 0', fontSize: '14px' }}>{a.clientes?.nome || 'Cliente'}</p>
-                            <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{a.servicos?.nome} · {a.barbeiros?.nome || 'Sem preferência'}</p>
-                            {a.clientes?.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
-                            {pago ? (
-                              <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago</p>
-                            ) : pagamentoAg?.id === a.id ? (
-                              <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
-                                <div style={estilos.label}>Valor pago (R$)</div>
-                                <input style={estilos.input} value={pagamentoValor} onChange={(e) => setPagamentoValor(e.target.value)} inputMode="decimal" />
-                                <div style={{ display: 'flex', gap: '8px' }}>
-                                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarPagamento}>Confirmar</button>
-                                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagamentoAg(null)}>Cancelar</button>
-                                </div>
-                              </div>
-                            ) : (
-                              <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirPagamento(a)}>Marcar como pago</button>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-
-                    {/* Só ADMIN vê membros do Club e produtos */}
-                    {ehAdmin && (
                       <>
-                        <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
-                          {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
-                        </button>
-
-                        {mostrarMembros && (
-                          <div style={{ marginTop: '8px' }}>
-                            {membrosClub.length === 0 ? (
-                              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
-                                Nenhum membro no Club ainda.
-                              </div>
-                            ) : (
-                              <>
-                                <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>{membrosClub.length} membro(s)</p>
-                                {membrosClub.map((m) => (
-                                  <div key={m.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                      <div>
-                                        <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
-                                        <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
-                                        <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>
-                                          {barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}
-                                        </p>
-                                        {m.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{m.telefone}</p>}
-                                      </div>
-                                      <span onClick={() => { if (confirm('Remover ' + m.nome + ' do Club?')) removerMembro(m.id); }}
-                                        style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer', whiteSpace: 'nowrap' }}>remover</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </>
-                            )}
-                          </div>
-                        )}
-
-                        <button style={{ ...estilos.botaoSec, marginTop: '20px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
-                          {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
-                        </button>
-
-                        {mostrarProdutos && (
-                          <div style={{ marginTop: '8px' }}>
-                            <button style={estilos.botaoSec} onClick={() => { if (mostrarFormProduto) { setMostrarFormProduto(false); } else { abrirFormNovoProduto(); } }}>
-                              {mostrarFormProduto ? 'Cancelar' : '+ Novo produto'}
-                            </button>
-
-                            {mostrarFormProduto && (
-                              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                                <div style={estilos.label}>Nome do produto</div>
-                                <input style={estilos.input} value={prodNome} onChange={(e) => setProdNome(e.target.value)} placeholder="Ex: Pomada modeladora" />
-                                <div style={estilos.label}>Preço (R$)</div>
-                                <input style={estilos.input} value={prodPreco} onChange={(e) => setProdPreco(e.target.value)} placeholder="Ex: 35,00" inputMode="decimal" />
-                                <div style={estilos.label}>Quantidade em estoque</div>
-                                <input style={estilos.input} value={prodEstoque} onChange={(e) => setProdEstoque(e.target.value)} placeholder="Ex: 10" inputMode="numeric" />
-                                {erroProduto && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroProduto}</p>}
-                                <button style={estilos.botao(true)} onClick={salvarProduto}>{prodEditandoId ? 'Salvar alterações' : 'Adicionar produto'}</button>
-                              </div>
-                            )}
-
-                            {produtos.length === 0 ? (
-                              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
-                                Nenhum produto cadastrado ainda.
-                              </div>
-                            ) : (
-                              produtos.map((p) => (
-                                <div key={p.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                    <div style={{ flex: 1 }}>
-                                      <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{p.nome}</p>
-                                      <p style={{ margin: '2px 0 0', fontSize: '13px', color: OURO }}>R$ {formatarReal(p.preco)}</p>
-                                      <p style={{ margin: '2px 0 0', fontSize: '11px', color: p.estoque <= 0 ? '#e07a7a' : '#8a8a8a' }}>
-                                        {p.estoque <= 0 ? 'Sem estoque' : `${p.estoque} em estoque`}
-                                      </p>
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
-                                      <span onClick={() => abrirFormEditarProduto(p)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>editar</span>
-                                      <span onClick={() => { if (confirm('Remover ' + p.nome + '?')) removerProduto(p.id); }} style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer' }}>remover</span>
-                                    </div>
-                                  </div>
-                                  {vendaProduto?.id === p.id ? (
-                                    <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
-                                      <div style={estilos.label}>Quantidade vendida</div>
-                                      <input style={estilos.input} value={vendaQtd} onChange={(e) => setVendaQtd(e.target.value)} inputMode="numeric" />
-                                      <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 10px' }}>Total: R$ {formatarReal((parseInt(vendaQtd) || 0) * Number(p.preco))}</p>
-                                      {erroVenda && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroVenda}</p>}
-                                      <div style={{ display: 'flex', gap: '8px' }}>
-                                        <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarVenda}>Confirmar venda</button>
-                                        <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setVendaProduto(null)}>Cancelar</button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    p.estoque > 0 && <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirVenda(p)}>Vender / dar baixa</button>
-                                  )}
-                                </div>
-                              ))
-                            )}
-                          </div>
-                        )}
+                        <BlocoAgenda />
+                        <div style={{ marginTop: '20px' }}>
+                          <BlocoAdminExtra />
+                        </div>
                       </>
                     )}
                   </>
