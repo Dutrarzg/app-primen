@@ -532,6 +532,21 @@ function App() {
     setDataInicioInput('');
     carregarVencimentos();
   }
+  
+  function cobrarWhatsApp(m) {
+    const tel = (m.telefone || '').replace(/\D/g, '');
+    if (tel.length < 10) { alert('Esse membro não tem um WhatsApp válido cadastrado.'); return; }
+    const primeiroNome = (m.nome || '').split(' ')[0];
+    const dias = diasAte(m.club_vencimento);
+    let situacao;
+    if (dias === null) situacao = 'está chegando a hora de renovar seu plano do Club Primen';
+    else if (dias < 0) situacao = `seu plano do Club Primen venceu há ${Math.abs(dias)} dia${Math.abs(dias) !== 1 ? 's' : ''}`;
+    else if (dias === 0) situacao = 'seu plano do Club Primen vence hoje';
+    else situacao = `seu plano do Club Primen vence em ${dias} dia${dias !== 1 ? 's' : ''}`;
+    const plano = m.club_plano || 'Club Primen';
+    const msg = `Olá ${primeiroNome}! Passando pra avisar que ${situacao} (${plano}). Para continuar aproveitando as vantagens, é só renovar. Me chama aqui que te passo o Pix pra pagamento. Qualquer dúvida, estou à disposição! 💈`;
+    window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+  }
 
   async function carregarProdutos() {
     const { data } = await supabase.from('produtos').select('*').order('nome', { ascending: true });
@@ -986,15 +1001,19 @@ function App() {
             const vencData = m.club_vencimento ? new Date(m.club_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : null;
             return (
               <div key={m.id} style={{ border: `1px solid ${corBorda}`, borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left', gap: '10px' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
                     <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
                     {ehAdmin && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}</p>}
-                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: statusCor, fontWeight: 500 }}>
+                   <p style={{ margin: '4px 0 0', fontSize: '12px', color: statusCor, fontWeight: 500 }}>
                       {statusTexto}{vencData ? ` · ${vencData}` : ''}
                     </p>
                   </div>
+                  <button onClick={() => cobrarWhatsApp(m)} title="Cobrar no WhatsApp"
+                    style={{ border: 'none', background: '#25D366', color: '#fff', borderRadius: '8px', padding: '8px 10px', fontSize: '16px', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start' }}>
+                    💬
+                  </button>
                 </div>
                 {editandoInicioId === m.id ? (
                   <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
