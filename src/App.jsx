@@ -1011,8 +1011,8 @@ function App() {
                     </p>
                   </div>
                   <button onClick={() => cobrarWhatsApp(m)} title="Cobrar no WhatsApp"
-                    style={{ border: 'none', background: '#25D366', color: '#fff', borderRadius: '8px', padding: '8px 10px', fontSize: '16px', cursor: 'pointer', flexShrink: 0, alignSelf: 'flex-start' }}>
-                    💬
+                    style={{ border: 'none', background: '#25D366', color: '#fff', borderRadius: '10px', padding: '10px 12px', fontSize: '12px', fontWeight: 600, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                    Cobrar
                   </button>
                 </div>
                 {editandoInicioId === m.id ? (
