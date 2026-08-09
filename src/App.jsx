@@ -66,6 +66,14 @@ function formatarTelefone(valor) {
   return `(${nums.slice(0, 2)}) ${nums.slice(2, 7)}-${nums.slice(7)}`;
 }
 
+function formatarCPF(valor) {
+  const nums = valor.replace(/\D/g, '').slice(0, 11);
+  if (nums.length <= 3) return nums;
+  if (nums.length <= 6) return `${nums.slice(0, 3)}.${nums.slice(3)}`;
+  if (nums.length <= 9) return `${nums.slice(0, 3)}.${nums.slice(3, 6)}.${nums.slice(6)}`;
+  return `${nums.slice(0, 3)}.${nums.slice(3, 6)}.${nums.slice(6, 9)}-${nums.slice(9)}`;
+}
+
 function formatarReal(valor) {
   return Number(valor).toFixed(2).replace('.', ',');
 }
@@ -86,7 +94,6 @@ function App() {
   const [modo, setModo] = useState('cliente');
   const [mostrarAbertura, setMostrarAbertura] = useState(true);
 
-  // Detecta tamanho da tela (PC vs celular) — só afeta o layout da área da equipe
   const [ehTelaGrande, setEhTelaGrande] = useState(typeof window !== 'undefined' && window.innerWidth >= 900);
   useEffect(() => {
     function aoRedimensionar() { setEhTelaGrande(window.innerWidth >= 900); }
@@ -125,6 +132,17 @@ function App() {
   const [clubBarbeiro, setClubBarbeiro] = useState(null);
   const [vagasUsadas, setVagasUsadas] = useState({});
   const [processandoClub, setProcessandoClub] = useState(false);
+
+  // ===== CADASTRO RÁPIDO DO CLUB (via link ?club=) =====
+  const [clubLinkBarbeiro, setClubLinkBarbeiro] = useState(null); // barbeiro do link
+  const [clubLinkVagasCheias, setClubLinkVagasCheias] = useState(false);
+  const [crNome, setCrNome] = useState('');
+  const [crTel, setCrTel] = useState('');
+  const [crSenha, setCrSenha] = useState('');
+  const [crCpf, setCrCpf] = useState('');
+  const [crPlano, setCrPlano] = useState(null);
+  const [crErro, setCrErro] = useState('');
+  const [crProcessando, setCrProcessando] = useState(false);
 
   const [equipeUsuario, setEquipeUsuario] = useState('');
   const [equipeSenha, setEquipeSenha] = useState('');
@@ -186,6 +204,23 @@ function App() {
       const { data: barbeirosData } = await supabase.from('barbeiros').select('*').eq('ativo', true);
       setServicos(servicosData || []);
       setBarbeiros(barbeirosData || []);
+
+      // Checa se veio pelo link de cadastro rápido do Club (?club=slug)
+      const params = new URLSearchParams(window.location.search);
+      const slug = params.get('club');
+      if (slug && barbeirosData) {
+        const barb = barbeirosData.find((b) => b.slug === slug.toLowerCase());
+        if (barb) {
+          // Conta vagas usadas desse barbeiro
+          const { data: membros } = await supabase.from('clientes').select('id').eq('membro_club', true).eq('club_barbeiro_id', barb.id);
+          const usadas = (membros || []).length;
+          const restantes = (barb.vagas_club || 0) - usadas;
+          setClubLinkBarbeiro(barb);
+          setClubLinkVagasCheias(restantes <= 0);
+          setModo('cadastro-club');
+          setMostrarAbertura(false); // pula a abertura no link
+        }
+      }
       setCarregando(false);
     }
     buscarDados();
@@ -193,6 +228,8 @@ function App() {
     async function checarSessao() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('club')) return; // se veio pelo link, não redireciona
         const { data: barb } = await supabase.from('barbeiros').select('*').eq('auth_id', session.user.id).maybeSingle();
         if (barb) { setBarbeiroLogado(barb); setModo('dono'); carregarAgenda(new Date(), barb); return; }
         const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', session.user.id).maybeSingle();
@@ -282,6 +319,43 @@ function App() {
     setClienteLogado(null);
     setLoginSenha('');
     setTela('login');
+  }
+
+  // ===== CADASTRO RÁPIDO DO CLUB =====
+  async function confirmarCadastroClub() {
+    setCrErro('');
+    if (!crNome.trim()) { setCrErro('Digite seu nome.'); return; }
+    const telNums = crTel.replace(/\D/g, '');
+    if (telNums.length < 10) { setCrErro('Digite um celular válido.'); return; }
+    if (crSenha.length < 6) { setCrErro('A senha precisa ter pelo menos 6 caracteres.'); return; }
+    const cpfNums = crCpf.replace(/\D/g, '');
+    if (cpfNums.length !== 11) { setCrErro('Digite um CPF válido (11 dígitos).'); return; }
+    if (!crPlano) { setCrErro('Escolha o plano.'); return; }
+
+    setCrProcessando(true);
+    // Cria a conta no Auth
+    const email = telParaEmail(crTel);
+    const { data: signData, error: signError } = await supabase.auth.signUp({ email, password: crSenha });
+    if (signError) {
+      setCrProcessando(false);
+      if (signError.message.toLowerCase().includes('already')) { setCrErro('Esse celular já tem conta. Entre pelo app normal.'); }
+      else { setCrErro('Erro ao criar conta. Tente novamente.'); }
+      return;
+    }
+    const planoNome = CLUB.planos.find((p) => p.id === crPlano)?.nome;
+    // Cria o cliente já como membro do Club, com o barbeiro do link
+    const { data: novo, error: erroCli } = await supabase.from('clientes').insert({
+      nome: crNome.trim(), telefone: crTel.trim(), auth_id: signData.user.id,
+      cpf: cpfNums, membro_club: true, club_plano: planoNome, club_barbeiro_id: clubLinkBarbeiro.id,
+    }).select().single();
+    setCrProcessando(false);
+    if (erroCli) { setCrErro('Erro ao salvar seus dados. Tente novamente.'); return; }
+    localStorage.setItem('primen_tel', crTel.trim());
+    setClienteLogado(novo);
+    setModo('cliente');
+    setTela('club-sucesso');
+    // Limpa o ?club= da URL
+    window.history.replaceState({}, '', window.location.pathname);
   }
 
   async function entrarComoEquipe() {
@@ -596,9 +670,6 @@ function App() {
     porBarbeiro[nome] = (porBarbeiro[nome] || 0) + Number(m.valor);
   });
 
-  // ===== BLOCOS REUTILIZÁVEIS DA ÁREA DA EQUIPE =====
-  // (definidos como funções que retornam JSX, pra usar tanto no layout de celular quanto de PC)
-
   function BlocoAgenda() {
     return (
       <>
@@ -846,11 +917,9 @@ function App() {
     if (!ehAdmin) return null;
     return (
       <>
-        {ehAdmin && (
-          <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
-            {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
-          </button>
-        )}
+        <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+          {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+        </button>
         {mostrarFormBloqueio && (
           <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
             <div style={estilos.label}>Fechar para</div>
@@ -984,6 +1053,63 @@ function App() {
         ) : (
           <div style={larguraArea}>
 
+            {/* ===== CADASTRO RÁPIDO DO CLUB (via link) ===== */}
+            {modo === 'cadastro-club' && (
+              <div style={estilos.conteudo}>
+                <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '16px', padding: '24px 20px', background: 'linear-gradient(180deg, rgba(201,162,39,0.10), rgba(201,162,39,0.02))', marginBottom: '18px' }}>
+                  <div style={{ fontSize: '40px', lineHeight: 1 }}>👑</div>
+                  <p style={{ fontSize: '20px', fontWeight: 700, color: OURO, margin: '8px 0 2px' }}>CLUB PRIMEN</p>
+                  <p style={{ fontSize: '13px', color: '#d6d6d6', margin: 0 }}>Cadastro com {clubLinkBarbeiro?.nome}</p>
+                </div>
+
+                {clubLinkVagasCheias ? (
+                  <div style={{ textAlign: 'center', border: '1px dashed #a33d3d', borderRadius: '12px', padding: '24px', color: '#e07a7a', fontSize: '14px' }}>
+                    As vagas do Club com {clubLinkBarbeiro?.nome?.split(' ')[0]} estão esgotadas no momento.<br /><br />
+                    <span style={{ color: '#8a8a8a', fontSize: '13px' }}>Fale com a barbearia para entrar na lista de espera.</span>
+                    <button onClick={whatsClub} style={{ width: '100%', marginTop: '16px', padding: '12px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>Falar no WhatsApp</button>
+                  </div>
+                ) : (
+                  <>
+                    <p style={{ fontSize: '13px', color: '#a3a3a3', marginBottom: '14px', textAlign: 'center' }}>
+                      Preencha para entrar no Club com {clubLinkBarbeiro?.nome?.split(' ')[0]}.
+                    </p>
+
+                    <div style={estilos.label}>Nome completo</div>
+                    <input style={estilos.input} value={crNome} onChange={(e) => setCrNome(e.target.value)} placeholder="Seu nome" />
+
+                    <div style={estilos.label}>Celular</div>
+                    <input style={estilos.input} value={crTel} onChange={(e) => setCrTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+
+                    <div style={estilos.label}>CPF</div>
+                    <input style={estilos.input} value={crCpf} onChange={(e) => setCrCpf(formatarCPF(e.target.value))} placeholder="000.000.000-00" inputMode="numeric" />
+
+                    <div style={estilos.label}>Crie uma senha (mín. 6 caracteres)</div>
+                    <input style={estilos.input} type="password" value={crSenha} onChange={(e) => setCrSenha(e.target.value)} placeholder="Sua senha" />
+
+                    <div style={{ ...estilos.label, marginTop: '6px' }}>Escolha seu plano</div>
+                    {CLUB.planos.map((p) => {
+                      const sel = crPlano === p.id;
+                      return (
+                        <div key={p.id} onClick={() => setCrPlano(p.id)}
+                          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: sel ? '1px solid #C9A227' : '1px solid #262626', background: sel ? 'rgba(201,162,39,0.08)' : '#111', borderRadius: '10px', padding: '14px', marginBottom: '10px', cursor: 'pointer' }}>
+                          <span style={{ fontSize: '14px', fontWeight: 500 }}>{p.nome}</span>
+                          <span><span style={{ fontSize: '11px', color: OURO }}>R$ </span><span style={{ fontSize: '18px', fontWeight: 700, color: OURO }}>{p.preco}</span><span style={{ fontSize: '10px', color: '#8a8a8a' }}>/mês</span></span>
+                        </div>
+                      );
+                    })}
+
+                    {crErro && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{crErro}</p>}
+                    <button onClick={confirmarCadastroClub} disabled={crProcessando} style={estilos.botao(!crProcessando)}>
+                      {crProcessando ? 'Cadastrando...' : 'Entrar no Club'}
+                    </button>
+                    <p style={{ fontSize: '10px', color: '#6b6b6b', textAlign: 'center', marginTop: '12px' }}>
+                      Seus dados são usados apenas para o cadastro do Club Primen.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+
             {modo === 'cliente' && (
               <div style={estilos.conteudo}>
                 {tela === 'login' && (
@@ -1012,6 +1138,16 @@ function App() {
                     {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
                     <button onClick={cadastrar} disabled={processandoLogin} style={estilos.botao(!processandoLogin)}>{processandoLogin ? 'Criando...' : 'Criar conta e entrar'}</button>
                   </>
+                )}
+
+                {tela === 'club-sucesso' && (
+                  <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '28px 20px' }}>
+                    <div style={{ fontSize: '44px' }}>👑</div>
+                    <p style={{ fontWeight: 700, fontSize: '18px', color: OURO, margin: '10px 0 4px' }}>Bem-vindo ao Club!</p>
+                    <p style={{ fontSize: '13px', color: '#a3a3a3', margin: '0 0 4px' }}>{clienteLogado?.club_plano}</p>
+                    <p style={{ fontSize: '12px', color: '#7a7a7a', margin: 0 }}>com {barbeiros.find((b) => b.id === clienteLogado?.club_barbeiro_id)?.nome || 'seu barbeiro'}</p>
+                    <button onClick={() => setTela('menu')} style={{ ...estilos.botao(true), marginTop: '20px' }}>Ir para o app</button>
+                  </div>
                 )}
 
                 {tela === 'menu' && (
@@ -1275,7 +1411,6 @@ function App() {
                 <p style={{ fontSize: '13px', color: '#f2f2f2', margin: '0 0 16px' }}>Olá, {barbeiroLogado?.nome?.split(' ')[0]} 👋 {!ehAdmin && <span style={{ fontSize: '11px', color: '#8a8a8a' }}>(acesso da equipe)</span>}</p>
 
                 {ehTelaGrande ? (
-                  // ===== LAYOUT COMPUTADOR: duas colunas =====
                   <>
                     <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
@@ -1295,7 +1430,6 @@ function App() {
                     )}
                   </>
                 ) : (
-                  // ===== LAYOUT CELULAR: com botão de alternar (como era) =====
                   <>
                     <button style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '16px' }}
                       onClick={() => { if (!mostrarFinanceiro) carregarFinanceiro(); setMostrarFinanceiro(!mostrarFinanceiro); }}>
