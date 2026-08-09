@@ -59,6 +59,20 @@ function dataParaISO(data) {
   return `${ano}-${mes}-${dia}`;
 }
 
+function somarDias(dataISO, dias) {
+  const d = new Date(dataISO + 'T12:00:00');
+  d.setDate(d.getDate() + dias);
+  return dataParaISO(d);
+}
+
+function diasAte(vencimentoISO) {
+  if (!vencimentoISO) return null;
+  const venc = new Date(vencimentoISO + 'T12:00:00');
+  const hoje0 = new Date();
+  hoje0.setHours(12, 0, 0, 0);
+  return Math.round((venc - hoje0) / (1000 * 60 * 60 * 24));
+}
+
 function formatarTelefone(valor) {
   const nums = valor.replace(/\D/g, '').slice(0, 11);
   if (nums.length <= 2) return nums.length ? `(${nums}` : '';
@@ -133,8 +147,7 @@ function App() {
   const [vagasUsadas, setVagasUsadas] = useState({});
   const [processandoClub, setProcessandoClub] = useState(false);
 
-  // ===== CADASTRO RÁPIDO DO CLUB (via link ?club=) =====
-  const [clubLinkBarbeiro, setClubLinkBarbeiro] = useState(null); // barbeiro do link
+  const [clubLinkBarbeiro, setClubLinkBarbeiro] = useState(null);
   const [clubLinkVagasCheias, setClubLinkVagasCheias] = useState(false);
   const [crNome, setCrNome] = useState('');
   const [crTel, setCrTel] = useState('');
@@ -156,6 +169,11 @@ function App() {
   const [carregandoAgenda, setCarregandoAgenda] = useState(false);
   const [membrosClub, setMembrosClub] = useState([]);
   const [mostrarMembros, setMostrarMembros] = useState(false);
+
+  const [mostrarVencimentos, setMostrarVencimentos] = useState(false);
+  const [membrosVenc, setMembrosVenc] = useState([]);
+  const [editandoInicioId, setEditandoInicioId] = useState(null);
+  const [dataInicioInput, setDataInicioInput] = useState('');
 
   const [mostrarFormManual, setMostrarFormManual] = useState(false);
   const [manualNome, setManualNome] = useState('');
@@ -205,20 +223,18 @@ function App() {
       setServicos(servicosData || []);
       setBarbeiros(barbeirosData || []);
 
-      // Checa se veio pelo link de cadastro rápido do Club (?club=slug)
       const params = new URLSearchParams(window.location.search);
       const slug = params.get('club');
       if (slug && barbeirosData) {
         const barb = barbeirosData.find((b) => b.slug === slug.toLowerCase());
         if (barb) {
-          // Conta vagas usadas desse barbeiro
           const { data: membros } = await supabase.from('clientes').select('id').eq('membro_club', true).eq('club_barbeiro_id', barb.id);
           const usadas = (membros || []).length;
           const restantes = (barb.vagas_club || 0) - usadas;
           setClubLinkBarbeiro(barb);
           setClubLinkVagasCheias(restantes <= 0);
           setModo('cadastro-club');
-          setMostrarAbertura(false); // pula a abertura no link
+          setMostrarAbertura(false);
         }
       }
       setCarregando(false);
@@ -229,7 +245,7 @@ function App() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session?.user) {
         const params = new URLSearchParams(window.location.search);
-        if (params.get('club')) return; // se veio pelo link, não redireciona
+        if (params.get('club')) return;
         const { data: barb } = await supabase.from('barbeiros').select('*').eq('auth_id', session.user.id).maybeSingle();
         if (barb) { setBarbeiroLogado(barb); setModo('dono'); carregarAgenda(new Date(), barb); return; }
         const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', session.user.id).maybeSingle();
@@ -321,7 +337,6 @@ function App() {
     setTela('login');
   }
 
-  // ===== CADASTRO RÁPIDO DO CLUB =====
   async function confirmarCadastroClub() {
     setCrErro('');
     if (!crNome.trim()) { setCrErro('Digite seu nome.'); return; }
@@ -333,7 +348,6 @@ function App() {
     if (!crPlano) { setCrErro('Escolha o plano.'); return; }
 
     setCrProcessando(true);
-    // Cria a conta no Auth
     const email = telParaEmail(crTel);
     const { data: signData, error: signError } = await supabase.auth.signUp({ email, password: crSenha });
     if (signError) {
@@ -343,18 +357,18 @@ function App() {
       return;
     }
     const planoNome = CLUB.planos.find((p) => p.id === crPlano)?.nome;
-    // Cria o cliente já como membro do Club, com o barbeiro do link
+    const vencimento = somarDias(dataParaISO(new Date()), 30);
     const { data: novo, error: erroCli } = await supabase.from('clientes').insert({
       nome: crNome.trim(), telefone: crTel.trim(), auth_id: signData.user.id,
       cpf: cpfNums, membro_club: true, club_plano: planoNome, club_barbeiro_id: clubLinkBarbeiro.id,
+      club_vencimento: vencimento,
     }).select().single();
     setCrProcessando(false);
-    if (erroCli) { setCrErro('Erro ao salvar seus dados. Tente novamente.'); return; }
+    if (erroCli) { setCrErro('Erro ao salvar seus dados. Esse celular pode já ter conta.'); return; }
     localStorage.setItem('primen_tel', crTel.trim());
     setClienteLogado(novo);
     setModo('cliente');
     setTela('club-sucesso');
-    // Limpa o ?club= da URL
     window.history.replaceState({}, '', window.location.pathname);
   }
 
@@ -396,11 +410,12 @@ function App() {
     if (!clubPlano || !clubBarbeiro) return;
     setProcessandoClub(true);
     const planoNome = CLUB.planos.find((p) => p.id === clubPlano)?.nome;
+    const vencimento = somarDias(dataParaISO(new Date()), 30);
     await supabase.from('clientes').update({
-      membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id,
+      membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id, club_vencimento: vencimento,
     }).eq('id', clienteLogado.id);
     setProcessandoClub(false);
-    setClienteLogado({ ...clienteLogado, membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id });
+    setClienteLogado({ ...clienteLogado, membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id, club_vencimento: vencimento });
   }
 
   function whatsClub() {
@@ -481,9 +496,41 @@ function App() {
 
   async function removerMembro(id) {
     await supabase.from('clientes')
-      .update({ membro_club: false, club_plano: null, club_barbeiro_id: null })
+      .update({ membro_club: false, club_plano: null, club_barbeiro_id: null, club_vencimento: null })
       .eq('id', id);
     carregarMembros();
+    if (mostrarVencimentos) carregarVencimentos();
+  }
+
+  async function carregarVencimentos() {
+    let query = supabase
+      .from('clientes')
+      .select('id, nome, telefone, club_plano, club_barbeiro_id, club_vencimento')
+      .eq('membro_club', true);
+    if (barbeiroLogado && barbeiroLogado.nivel !== 'admin') {
+      query = query.eq('club_barbeiro_id', barbeiroLogado.id);
+    }
+    const { data } = await query;
+    const ordenado = (data || []).sort((a, b) => {
+      if (!a.club_vencimento) return 1;
+      if (!b.club_vencimento) return -1;
+      return a.club_vencimento.localeCompare(b.club_vencimento);
+    });
+    setMembrosVenc(ordenado);
+  }
+
+  function abrirEditarInicio(m) {
+    setEditandoInicioId(m.id);
+    setDataInicioInput('');
+  }
+
+  async function salvarInicio(m) {
+    if (!dataInicioInput) return;
+    const vencimento = somarDias(dataInicioInput, 30);
+    await supabase.from('clientes').update({ club_vencimento: vencimento }).eq('id', m.id);
+    setEditandoInicioId(null);
+    setDataInicioInput('');
+    carregarVencimentos();
   }
 
   async function carregarProdutos() {
@@ -913,14 +960,74 @@ function App() {
     );
   }
 
-  function BlocoAdminExtra() {
-    if (!ehAdmin) return null;
+  function BlocoVencimentos() {
     return (
       <>
-        <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
-          {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
-        </button>
-        {mostrarFormBloqueio && (
+        <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 12px' }}>
+          Membros do Club {ehAdmin ? '(todos)' : '(seus)'} · ordenados por quem vence primeiro
+        </p>
+        {membrosVenc.length === 0 ? (
+          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+            Nenhum membro no Club ainda.
+          </div>
+        ) : (
+          membrosVenc.map((m) => {
+            const dias = diasAte(m.club_vencimento);
+            let corBorda = '#262626', statusTexto = '', statusCor = '#8a8a8a';
+            if (m.club_vencimento === null || dias === null) {
+              statusTexto = 'Sem data de início'; statusCor = '#8a8a8a';
+            } else if (dias < 0) {
+              corBorda = '#a33d3d'; statusTexto = `Vencido há ${Math.abs(dias)} dia${Math.abs(dias) !== 1 ? 's' : ''}`; statusCor = '#e07a7a';
+            } else if (dias <= 3) {
+              corBorda = '#C9A227'; statusTexto = dias === 0 ? 'Vence hoje!' : `Vence em ${dias} dia${dias !== 1 ? 's' : ''}`; statusCor = '#C9A227';
+            } else {
+              statusTexto = `Vence em ${dias} dias`; statusCor = '#5cb67a';
+            }
+            const vencData = m.club_vencimento ? new Date(m.club_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : null;
+            return (
+              <div key={m.id} style={{ border: `1px solid ${corBorda}`, borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
+                    <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
+                    {ehAdmin && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}</p>}
+                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: statusCor, fontWeight: 500 }}>
+                      {statusTexto}{vencData ? ` · ${vencData}` : ''}
+                    </p>
+                  </div>
+                </div>
+                {editandoInicioId === m.id ? (
+                  <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                    <div style={estilos.label}>Data que começou o plano</div>
+                    <input type="date" style={estilos.input} value={dataInicioInput} onChange={(e) => setDataInicioInput(e.target.value)} />
+                    <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>O vencimento será 30 dias depois dessa data.</p>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={() => salvarInicio(m)}>Salvar</button>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setEditandoInicioId(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirEditarInicio(m)}>
+                    {m.club_vencimento ? 'Ajustar data de início' : 'Definir data de início'}
+                  </button>
+                )}
+              </div>
+            );
+          })
+        )}
+      </>
+    );
+  }
+
+  function BlocoAdminExtra() {
+    return (
+      <>
+        {ehAdmin && (
+          <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+            {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+          </button>
+        )}
+        {ehAdmin && mostrarFormBloqueio && (
           <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
             <div style={estilos.label}>Fechar para</div>
             <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
@@ -933,11 +1040,22 @@ function App() {
           </div>
         )}
 
-        <button style={estilos.botaoSec} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
-          {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
+        <button style={estilos.botaoSec} onClick={() => { if (!mostrarVencimentos) carregarVencimentos(); setMostrarVencimentos(!mostrarVencimentos); }}>
+          {mostrarVencimentos ? 'Esconder vencimentos do Club' : '📅 Club / Vencimentos'}
         </button>
+        {mostrarVencimentos && (
+          <div style={{ marginTop: '8px' }}>
+            <BlocoVencimentos />
+          </div>
+        )}
 
-        {mostrarMembros && (
+        {ehAdmin && (
+          <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { if (!mostrarMembros) carregarMembros(); setMostrarMembros(!mostrarMembros); }}>
+            {mostrarMembros ? 'Esconder membros do Club' : '👑 Ver membros do Club'}
+          </button>
+        )}
+
+        {ehAdmin && mostrarMembros && (
           <div style={{ marginTop: '8px' }}>
             {membrosClub.length === 0 ? (
               <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
@@ -967,11 +1085,13 @@ function App() {
           </div>
         )}
 
-        <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
-          {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
-        </button>
+        {ehAdmin && (
+          <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
+            {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
+          </button>
+        )}
 
-        {mostrarProdutos && (
+        {ehAdmin && mostrarProdutos && (
           <div style={{ marginTop: '8px' }}>
             <button style={estilos.botaoSec} onClick={() => { if (mostrarFormProduto) { setMostrarFormProduto(false); } else { abrirFormNovoProduto(); } }}>
               {mostrarFormProduto ? 'Cancelar' : '+ Novo produto'}
@@ -1035,6 +1155,10 @@ function App() {
 
   const larguraArea = (modo === 'dono' && ehTelaGrande) ? estilos.conteudoLargo : estilos.conteudo;
 
+  // === REGRA DO MEMBRO DO CLUB (usada no calendário e no aviso) ===
+  const ehMembroClub = !!clienteLogado?.membro_club;
+  const barbeiroDoPlano = ehMembroClub ? barbeiros.find((b) => b.id === clienteLogado?.club_barbeiro_id) : null;
+
   return (
     <>
       {mostrarAbertura && (
@@ -1053,7 +1177,6 @@ function App() {
         ) : (
           <div style={larguraArea}>
 
-            {/* ===== CADASTRO RÁPIDO DO CLUB (via link) ===== */}
             {modo === 'cadastro-club' && (
               <div style={estilos.conteudo}>
                 <div style={{ textAlign: 'center', border: '1px solid #C9A227', borderRadius: '16px', padding: '24px 20px', background: 'linear-gradient(180deg, rgba(201,162,39,0.10), rgba(201,162,39,0.02))', marginBottom: '18px' }}>
@@ -1156,7 +1279,11 @@ function App() {
                       <span style={{ fontSize: '13px', color: '#f2f2f2' }}>Olá, {clienteLogado?.nome?.split(' ')[0]} 👋</span>
                       <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={sairDaConta}>Sair</span>
                     </div>
-                    <div onClick={() => { recomecarAgendamento(); setTela('agendar'); }}
+                    <div onClick={() => {
+                        recomecarAgendamento();
+                        if (ehMembroClub && barbeiroDoPlano) { setBarbeiroEscolhido(barbeiroDoPlano); setEtapa('dataHora'); }
+                        setTela('agendar');
+                      }}
                       style={{ border: '1px solid #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '14px', cursor: 'pointer', textAlign: 'center', background: 'rgba(201,162,39,0.05)' }}>
                       <div style={{ fontSize: '30px', marginBottom: '6px' }}>✂️</div>
                       <p style={{ margin: 0, fontWeight: 500, fontSize: '16px', color: OURO }}>Agendar horário</p>
@@ -1184,6 +1311,7 @@ function App() {
                         <p style={{ fontSize: '15px', color: '#f2f2f2', margin: 0 }}>Você já é membro! 🎉</p>
                         <p style={{ fontSize: '12px', color: '#C9A227', margin: '8px 0 0' }}>{clienteLogado.club_plano}</p>
                         <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '4px 0 0' }}>com {barbeiros.find((b) => b.id === clienteLogado.club_barbeiro_id)?.nome || 'seu barbeiro'}</p>
+                        {clienteLogado.club_vencimento && <p style={{ fontSize: '11px', color: '#6b6b6b', margin: '8px 0 0' }}>Vence em {new Date(clienteLogado.club_vencimento + 'T12:00:00').toLocaleDateString('pt-BR')}</p>}
                       </div>
                     ) : (
                       <>
@@ -1253,9 +1381,14 @@ function App() {
                     {etapa === 'servico' && (
                       <>
                         <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
+                        {ehMembroClub && (
+                          <div style={{ border: '1px solid #C9A227', borderRadius: '8px', padding: '10px 12px', marginBottom: '12px', background: 'rgba(201,162,39,0.08)' }}>
+                            <p style={{ margin: 0, fontSize: '12px', color: OURO }}>👑 Membro do Club: atendimento com {barbeiroDoPlano?.nome || 'seu barbeiro'}, de segunda a quinta.</p>
+                          </div>
+                        )}
                         <p style={estilos.titulo}>ESCOLHA O SERVIÇO</p>
                         {servicosAgendaveis.map((s) => (
-                          <div key={s.id} onClick={() => { setServicoEscolhido(s); setEtapa('equipe'); }}
+                          <div key={s.id} onClick={() => { setServicoEscolhido(s); setEtapa(ehMembroClub ? 'dataHora' : 'equipe'); }}
                             style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px', cursor: 'pointer' }}>
                             <div>
                               <p style={{ margin: 0, fontWeight: 500 }}>{s.nome}</p>
@@ -1298,11 +1431,16 @@ function App() {
 
                     {etapa === 'dataHora' && (
                       <>
-                        <div style={estilos.voltar} onClick={() => setEtapa('equipe')}>← {servicoEscolhido?.nome} · {barbeiroEscolhido?.nome}</div>
+                        <div style={estilos.voltar} onClick={() => setEtapa(ehMembroClub ? 'servico' : 'equipe')}>← {servicoEscolhido?.nome} · {barbeiroEscolhido?.nome}</div>
+                        {ehMembroClub && (
+                          <div style={{ border: '1px solid #C9A227', borderRadius: '8px', padding: '8px 12px', marginBottom: '12px', background: 'rgba(201,162,39,0.08)' }}>
+                            <p style={{ margin: 0, fontSize: '11px', color: OURO }}>👑 Club: só de segunda a quinta, com {barbeiroDoPlano?.nome?.split(' ')[0]}.</p>
+                          </div>
+                        )}
                         <p style={estilos.titulo}>ESCOLHA A DATA</p>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                           <span style={{ fontSize: '13px', textTransform: 'capitalize' }}>{mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</span>
-                          <span style={{ fontSize: '10px', color: '#6b6b6b' }}>dom fechado</span>
+                          <span style={{ fontSize: '10px', color: '#6b6b6b' }}>{ehMembroClub ? 'seg a qui' : 'dom fechado'}</span>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '6px' }}>
                           {['D','S','T','Q','Q','S','S'].map((d, i) => (<div key={i} style={{ textAlign: 'center', fontSize: '10px', color: '#6b6b6b' }}>{d}</div>))}
@@ -1310,7 +1448,9 @@ function App() {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '16px' }}>
                           {diasDoMes().map((data, i) => {
                             if (!data) return <div key={i}></div>;
-                            const bloqueado = data.getDay() === 0 || ehPassado(data);
+                            const dow = data.getDay();
+                            const foraDoClub = ehMembroClub && (dow === 5 || dow === 6);
+                            const bloqueado = dow === 0 || ehPassado(data) || foraDoClub;
                             const selecionada = dataEscolhida && data.getTime() === dataEscolhida.getTime();
                             return (
                               <div key={i} onClick={() => { if (!bloqueado) escolherData(data); }}
@@ -1422,12 +1562,10 @@ function App() {
                         <BlocoFinanceiro />
                       </div>
                     </div>
-                    {ehAdmin && (
-                      <div style={{ marginTop: '24px', borderTop: '1px solid #262626', paddingTop: '20px' }}>
-                        <p style={estilos.titulo}>GESTÃO</p>
-                        <BlocoAdminExtra />
-                      </div>
-                    )}
+                    <div style={{ marginTop: '24px', borderTop: '1px solid #262626', paddingTop: '20px' }}>
+                      <p style={estilos.titulo}>GESTÃO</p>
+                      <BlocoAdminExtra />
+                    </div>
                   </>
                 ) : (
                   <>
