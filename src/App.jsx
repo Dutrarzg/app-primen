@@ -217,6 +217,7 @@ function App() {
   const [meusHorarios, setMeusHorarios] = useState([]);
   const [carregandoMeus, setCarregandoMeus] = useState(false);
   const [agRemarcando, setAgRemarcando] = useState(null);
+  const [filtroBarbeiro, setFiltroBarbeiro] = useState('todos');
 
   useEffect(() => {
     const timer = setTimeout(() => setMostrarAbertura(false), 6000);
@@ -510,8 +511,9 @@ function App() {
     setEtapa('dataHora');
     setTela('agendar');
   }
-  async function carregarAgenda(data, barbRef) {
+  async function carregarAgenda(data, barbRef, filtroOverride) {
     const barb = barbRef || barbeiroLogado;
+    const filtro = filtroOverride !== undefined ? filtroOverride : filtroBarbeiro;
     setCarregandoAgenda(true);
     const dataISO = dataParaISO(data);
     let query = supabase
@@ -519,6 +521,7 @@ function App() {
       .select('id, horario, status, origem, servico_id, barbeiro_id, clientes(nome, telefone), servicos(nome, preco), barbeiros(nome)')
       .eq('data', dataISO).neq('status', 'cancelado');
     if (barb && barb.nivel !== 'admin') query = query.eq('barbeiro_id', barb.id);
+    else if (filtro !== 'todos') query = query.eq('barbeiro_id', filtro);
     const { data: ags } = await query.order('horario', { ascending: true });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
     const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id').eq('data', dataISO).eq('categoria', 'servico');
@@ -707,8 +710,9 @@ function App() {
     carregarFinanceiro();
   }
 
-  async function carregarFinanceiro(barbRef) {
+  async function carregarFinanceiro(barbRef, filtroOverride) {
     const barb = barbRef || barbeiroLogado;
+    const filtro = filtroOverride !== undefined ? filtroOverride : filtroBarbeiro;
     const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
     const fim = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
     let query = supabase.from('movimentacoes')
@@ -716,9 +720,17 @@ function App() {
       .gte('data', dataParaISO(ini)).lte('data', dataParaISO(fim));
     if (barb && barb.nivel !== 'admin') {
       query = query.eq('categoria', 'servico').eq('barbeiro_id', barb.id);
+    } else if (filtro !== 'todos') {
+      query = query.eq('barbeiro_id', filtro);
     }
     const { data } = await query.order('criado_em', { ascending: false });
     setMovimentacoes(data || []);
+  }
+
+  function trocarFiltroBarbeiro(valor) {
+    setFiltroBarbeiro(valor);
+    carregarAgenda(dataDono, null, valor);
+    carregarFinanceiro(null, valor);
   }
 
   async function lancarPagamentoClub() {
@@ -1793,6 +1805,25 @@ function App() {
                   <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={sairDaEquipe}>Sair</span>
                 </div>
                 <p style={{ fontSize: '13px', color: '#f2f2f2', margin: '0 0 16px' }}>Olá, {barbeiroLogado?.nome?.split(' ')[0]} 👋 {!ehAdmin && <span style={{ fontSize: '11px', color: '#8a8a8a' }}>(acesso da equipe)</span>}</p>
+
+                {ehAdmin && (
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '11px', color: '#8a8a8a', width: '100%', marginBottom: '2px' }}>Ver:</span>
+                    <button
+                      onClick={() => trocarFiltroBarbeiro('todos')}
+                      style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid ' + (filtroBarbeiro === 'todos' ? OURO : '#333'), background: filtroBarbeiro === 'todos' ? OURO : 'transparent', color: filtroBarbeiro === 'todos' ? '#0d0d0d' : '#c9c9c9', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                      Todos
+                    </button>
+                    {barbeiros.map((b) => (
+                      <button
+                        key={b.id}
+                        onClick={() => trocarFiltroBarbeiro(b.id)}
+                        style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid ' + (filtroBarbeiro === b.id ? OURO : '#333'), background: filtroBarbeiro === b.id ? OURO : 'transparent', color: filtroBarbeiro === b.id ? '#0d0d0d' : '#c9c9c9', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                        {b.nome?.split(' ')[0]}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {ehTelaGrande ? (
                   <>
