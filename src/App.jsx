@@ -144,6 +144,7 @@ function App() {
 
   const [clubPlano, setClubPlano] = useState(null);
   const [clubBarbeiro, setClubBarbeiro] = useState(null);
+  const [mostrarPixAssinatura, setMostrarPixAssinatura] = useState(false);
   const [vagasUsadas, setVagasUsadas] = useState({});
   const [processandoClub, setProcessandoClub] = useState(false);
 
@@ -419,6 +420,7 @@ function App() {
     }).eq('id', clienteLogado.id);
     setProcessandoClub(false);
     setClienteLogado({ ...clienteLogado, membro_club: true, club_plano: planoNome, club_barbeiro_id: clubBarbeiro.id, club_vencimento: vencimento });
+    setMostrarPixAssinatura(true);
   }
 
   function whatsClub() {
@@ -1422,7 +1424,50 @@ function App() {
                       <p style={{ fontSize: '22px', fontWeight: 700, color: OURO, margin: '8px 0 2px', letterSpacing: '0.5px' }}>CLUB PRIMEN</p>
                       <p style={{ fontSize: '13px', color: '#d6d6d6', margin: 0 }}>{CLUB.chamada}</p>
                     </div>
-                    {clienteLogado?.membro_club ? (
+                    {mostrarPixAssinatura ? (() => {
+                      const barbPix = barbeiros.find((b) => b.id === clienteLogado?.club_barbeiro_id);
+                      return (
+                        <div style={{ border: '1px solid #C9A227', borderRadius: '12px', padding: '20px', marginBottom: '18px' }}>
+                          <div style={{ textAlign: 'center', marginBottom: '14px' }}>
+                            <div style={{ fontSize: '34px' }}>🎉</div>
+                            <p style={{ fontSize: '16px', fontWeight: 700, color: OURO, margin: '6px 0 2px' }}>Quase lá!</p>
+                            <p style={{ fontSize: '13px', color: '#d6d6d6', margin: 0 }}>Pra ativar seu {clienteLogado?.club_plano}, faça o Pix e envie o comprovante pro seu barbeiro.</p>
+                          </div>
+                          {barbPix?.pix_qr_url || barbPix?.pix_copia_cola ? (
+                            <>
+                              <p style={{ fontSize: '12px', color: '#8a8a8a', textAlign: 'center', margin: '0 0 10px' }}>Pix de {barbPix?.nome}</p>
+                              {barbPix?.pix_qr_url && (
+                                <div style={{ textAlign: 'center', marginBottom: '14px' }}>
+                                  <img src={barbPix.pix_qr_url} alt="QR Code Pix" style={{ width: '200px', height: '200px', objectFit: 'contain', borderRadius: '10px', background: '#fff', padding: '8px' }} />
+                                </div>
+                              )}
+                              {barbPix?.pix_copia_cola && (
+                                <>
+                                  <p style={{ ...estilos.label, textAlign: 'center' }}>Pix copia e cola</p>
+                                  <div style={{ background: '#161616', border: '1px solid #333', borderRadius: '8px', padding: '12px', fontSize: '11px', color: '#d6d6d6', wordBreak: 'break-all', marginBottom: '10px', textAlign: 'center' }}>
+                                    {barbPix.pix_copia_cola}
+                                  </div>
+                                  <button style={{ width: '100%', padding: '12px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '14px', fontWeight: 600, cursor: 'pointer', marginBottom: '10px' }}
+                                    onClick={() => { navigator.clipboard.writeText(barbPix.pix_copia_cola); alert('Código Pix copiado! Agora é só colar no seu app do banco.'); }}>
+                                    Copiar código Pix
+                                  </button>
+                                </>
+                              )}
+                              <p style={{ fontSize: '11px', color: '#8a8a8a', textAlign: 'center', margin: '10px 0 0' }}>
+                                Depois de pagar, mande o comprovante pro seu barbeiro pra ativar o plano.
+                              </p>
+                            </>
+                          ) : (
+                            <p style={{ fontSize: '13px', color: '#8a8a8a', textAlign: 'center' }}>
+                              O Pix de {barbPix?.nome?.split(' ')[0] || 'seu barbeiro'} ainda não está disponível. Fale com a barbearia.
+                            </p>
+                          )}
+                          <button onClick={() => { setMostrarPixAssinatura(false); setTela('menu'); }} style={{ width: '100%', marginTop: '14px', padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }}>
+                            Ir para o app
+                          </button>
+                        </div>
+                      );
+                    })() : clienteLogado?.membro_club ? (
                       <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '12px', padding: '24px', marginBottom: '18px' }}>
                         <p style={{ fontSize: '15px', color: '#f2f2f2', margin: 0 }}>Você já é membro! 🎉</p>
                         <p style={{ fontSize: '12px', color: '#C9A227', margin: '8px 0 0' }}>{clienteLogado.club_plano}</p>
