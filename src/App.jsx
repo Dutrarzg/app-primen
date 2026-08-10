@@ -1716,16 +1716,16 @@ function App() {
                     <div style={{ display: 'flex', gap: '20px', alignItems: 'flex-start' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p style={estilos.titulo}>AGENDA</p>
-                        <BlocoAgenda />
+                        {BlocoAgenda()}
                       </div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <p style={estilos.titulo}>FINANCEIRO</p>
-                        <BlocoFinanceiro />
+                        {BlocoFinanceiro()}
                       </div>
                     </div>
                     <div style={{ marginTop: '24px', borderTop: '1px solid #262626', paddingTop: '20px' }}>
                       <p style={estilos.titulo}>GESTÃO</p>
-                      <BlocoAdminExtra />
+                      {BlocoAdminExtra()}
                     </div>
                   </>
                 ) : (
@@ -1736,12 +1736,12 @@ function App() {
                     </button>
 
                     {mostrarFinanceiro ? (
-                      <BlocoFinanceiro />
+                      BlocoFinanceiro()
                     ) : (
                       <>
-                        <BlocoAgenda />
+                        {BlocoAgenda()}
                         <div style={{ marginTop: '20px' }}>
-                          <BlocoAdminExtra />
+                          {BlocoAdminExtra()}
                         </div>
                       </>
                     )}
