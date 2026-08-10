@@ -174,6 +174,9 @@ function App() {
   const [membrosVenc, setMembrosVenc] = useState([]);
   const [editandoInicioId, setEditandoInicioId] = useState(null);
   const [dataInicioInput, setDataInicioInput] = useState('');
+  const [pagClubId, setPagClubId] = useState(null);
+  const [pagClubValor, setPagClubValor] = useState('');
+  const [pixAbertoId, setPixAbertoId] = useState(null);
 
   const [mostrarFormManual, setMostrarFormManual] = useState(false);
   const [manualNome, setManualNome] = useState('');
@@ -532,7 +535,7 @@ function App() {
     setDataInicioInput('');
     carregarVencimentos();
   }
-  
+
   function cobrarWhatsApp(m) {
     const tel = (m.telefone || '').replace(/\D/g, '');
     if (tel.length < 10) { alert('Esse membro não tem um WhatsApp válido cadastrado.'); return; }
@@ -546,6 +549,40 @@ function App() {
     const plano = m.club_plano || 'Club Primen';
     const msg = `Olá ${primeiroNome}! Passando pra avisar que ${situacao} (${plano}). Para continuar aproveitando as vantagens, é só renovar. Me chama aqui que te passo o Pix pra pagamento. Qualquer dúvida, estou à disposição! 💈`;
     window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+  }
+
+  // Valor do plano pra pré-preencher o pagamento (editável depois)
+  function valorDoPlano(planoNome) {
+    if (!planoNome) return '';
+    const p = CLUB.planos.find((x) => x.nome === planoNome);
+    return p ? p.preco : '';
+  }
+
+  // Abre o form de confirmar pagamento já com o valor do plano preenchido
+  function abrirPagamentoClub(m) {
+    setPagClubId(m.id);
+    setPagClubValor(valorDoPlano(m.club_plano));
+    setPixAbertoId(null);
+  }
+
+  // Confirma o pagamento: renova +30 (do vencimento se ainda válido, senão de hoje) e lança receita
+  async function confirmarPagamentoClub(m) {
+    const valorNum = parseFloat((pagClubValor || '').replace(',', '.')) || 0;
+    if (valorNum <= 0) { alert('Digite um valor válido.'); return; }
+    const hojeISO = dataParaISO(new Date());
+    const dias = diasAte(m.club_vencimento);
+    const base = (m.club_vencimento && dias >= 0) ? m.club_vencimento : hojeISO;
+    const novoVenc = somarDias(base, 30);
+    await supabase.from('clientes').update({ club_vencimento: novoVenc }).eq('id', m.id);
+    await supabase.from('movimentacoes').insert({
+      descricao: `Club: ${m.nome} (${m.club_plano || 'assinatura'})`,
+      valor: valorNum, categoria: 'club', barbeiro_id: m.club_barbeiro_id || null,
+      data: hojeISO,
+    });
+    setPagClubId(null);
+    setPagClubValor('');
+    carregarVencimentos();
+    carregarFinanceiro();
   }
 
   async function carregarProdutos() {
@@ -999,14 +1036,15 @@ function App() {
               statusTexto = `Vence em ${dias} dias`; statusCor = '#5cb67a';
             }
             const vencData = m.club_vencimento ? new Date(m.club_vencimento + 'T12:00:00').toLocaleDateString('pt-BR') : null;
+            const barbDoMembro = barbeiros.find((b) => b.id === m.club_barbeiro_id);
             return (
               <div key={m.id} style={{ border: `1px solid ${corBorda}`, borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', textAlign: 'left', gap: '10px' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{m.nome}</p>
                     <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#C9A227' }}>{m.club_plano || 'Club'}</p>
-                    {ehAdmin && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{barbeiros.find((b) => b.id === m.club_barbeiro_id)?.nome || 'Sem barbeiro'}</p>}
-                   <p style={{ margin: '4px 0 0', fontSize: '12px', color: statusCor, fontWeight: 500 }}>
+                    {ehAdmin && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{barbDoMembro?.nome || 'Sem barbeiro'}</p>}
+                    <p style={{ margin: '4px 0 0', fontSize: '12px', color: statusCor, fontWeight: 500 }}>
                       {statusTexto}{vencData ? ` · ${vencData}` : ''}
                     </p>
                   </div>
@@ -1015,6 +1053,66 @@ function App() {
                     Cobrar
                   </button>
                 </div>
+
+                {/* Botões de ação: ver Pix + confirmar pagamento */}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                  <button style={{ flex: 1, padding: '9px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '12px', cursor: 'pointer' }}
+                    onClick={() => { setPixAbertoId(pixAbertoId === m.id ? null : m.id); setPagClubId(null); }}>
+                    {pixAbertoId === m.id ? 'Esconder Pix' : 'Ver Pix'}
+                  </button>
+                  <button style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '12px', fontWeight: 600, cursor: 'pointer' }}
+                    onClick={() => { if (pagClubId === m.id) { setPagClubId(null); } else { abrirPagamentoClub(m); } }}>
+                    {pagClubId === m.id ? 'Cancelar' : 'Confirmar pagamento'}
+                  </button>
+                </div>
+
+                {/* Área do Pix do barbeiro do plano */}
+                {pixAbertoId === m.id && (
+                  <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                    {barbDoMembro?.pix_copia_cola || barbDoMembro?.pix_qr_url ? (
+                      <>
+                        <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 8px' }}>Pix de {barbDoMembro?.nome?.split(' ')[0]}</p>
+                        {barbDoMembro?.pix_qr_url && (
+                          <div style={{ textAlign: 'center', marginBottom: '10px' }}>
+                            <img src={barbDoMembro.pix_qr_url} alt="QR Code Pix" style={{ width: '180px', height: '180px', objectFit: 'contain', borderRadius: '8px', background: '#fff', padding: '6px' }} />
+                          </div>
+                        )}
+                        {barbDoMembro?.pix_copia_cola && (
+                          <>
+                            <div style={{ background: '#161616', border: '1px solid #333', borderRadius: '6px', padding: '10px', fontSize: '11px', color: '#d6d6d6', wordBreak: 'break-all', marginBottom: '8px' }}>
+                              {barbDoMembro.pix_copia_cola}
+                            </div>
+                            <button style={{ ...estilos.botaoSec, marginBottom: 0 }}
+                              onClick={() => { navigator.clipboard.writeText(barbDoMembro.pix_copia_cola); alert('Chave Pix copiada!'); }}>
+                              Copiar chave Pix
+                            </button>
+                          </>
+                        )}
+                      </>
+                    ) : (
+                      <p style={{ fontSize: '12px', color: '#8a8a8a', margin: 0, textAlign: 'center' }}>
+                        {barbDoMembro?.nome?.split(' ')[0] || 'Este barbeiro'} ainda não tem Pix cadastrado.
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Form de confirmar pagamento */}
+                {pagClubId === m.id && (
+                  <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
+                    <div style={estilos.label}>Valor recebido (R$)</div>
+                    <input style={estilos.input} value={pagClubValor} onChange={(e) => setPagClubValor(e.target.value)} inputMode="decimal" placeholder="Ex: 99,99" />
+                    <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 10px' }}>
+                      Ao confirmar, a assinatura renova por mais 30 dias e o valor entra no financeiro do Club.
+                    </p>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={() => confirmarPagamentoClub(m)}>Confirmar e renovar</button>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagClubId(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Definir/ajustar data de início */}
                 {editandoInicioId === m.id ? (
                   <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
                     <div style={estilos.label}>Data que começou o plano</div>
@@ -1026,7 +1124,7 @@ function App() {
                     </div>
                   </div>
                 ) : (
-                  <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirEditarInicio(m)}>
+                  <button style={{ ...estilos.botaoSec, marginTop: '8px', marginBottom: 0 }} onClick={() => abrirEditarInicio(m)}>
                     {m.club_vencimento ? 'Ajustar data de início' : 'Definir data de início'}
                   </button>
                 )}
@@ -1174,7 +1272,6 @@ function App() {
 
   const larguraArea = (modo === 'dono' && ehTelaGrande) ? estilos.conteudoLargo : estilos.conteudo;
 
-  // === REGRA DO MEMBRO DO CLUB (usada no calendário e no aviso) ===
   const ehMembroClub = !!clienteLogado?.membro_club;
   const barbeiroDoPlano = ehMembroClub ? barbeiros.find((b) => b.id === clienteLogado?.club_barbeiro_id) : null;
 
