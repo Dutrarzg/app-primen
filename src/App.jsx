@@ -214,6 +214,9 @@ function App() {
   const [mostrarFormClubPag, setMostrarFormClubPag] = useState(false);
   const [clubPagValor, setClubPagValor] = useState('');
   const [clubPagDesc, setClubPagDesc] = useState('');
+  const [meusHorarios, setMeusHorarios] = useState([]);
+  const [carregandoMeus, setCarregandoMeus] = useState(false);
+  const [agRemarcando, setAgRemarcando] = useState(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setMostrarAbertura(false), 6000);
@@ -456,13 +459,17 @@ function App() {
     });
     setSalvando(false);
     if (erroAg) { setErroSalvar('Esse horário já foi reservado. Escolha outro.'); return; }
+    if (agRemarcando) {
+      await supabase.from('agendamentos').update({ status: 'cancelado' }).eq('id', agRemarcando.id);
+      setAgRemarcando(null);
+    }
     setEtapa('sucesso');
   }
 
   function recomecarAgendamento() {
     setEtapa('servico'); setServicoEscolhido(null); setBarbeiroEscolhido(null);
     setDataEscolhida(null); setHorarioEscolhido(null); setPeriodoEscolhido(0);
-    setHorariosOcupados([]); setErroSalvar(''); setDiaFechadoCliente(false);
+    setHorariosOcupados([]); setErroSalvar(''); setDiaFechadoCliente(false); setAgRemarcando(null);
   }
 
   function abrirWhatsApp() {
@@ -471,6 +478,38 @@ function App() {
     window.open(`https://wa.me/${WHATSAPP_BARBEARIA}?text=${msg}`, '_blank');
   }
 
+  async function carregarMeusHorarios() {
+    if (!clienteLogado) return;
+    setCarregandoMeus(true);
+    const hojeISO = dataParaISO(new Date());
+    const { data: ags } = await supabase
+      .from('agendamentos')
+      .select('id, data, horario, servico_id, barbeiro_id, servicos(nome), barbeiros(nome)')
+      .eq('cliente_id', clienteLogado.id)
+      .eq('status', 'confirmado')
+      .gte('data', hojeISO)
+      .order('data', { ascending: true })
+      .order('horario', { ascending: true });
+    setMeusHorarios(ags || []);
+    setCarregandoMeus(false);
+  }
+  async function cancelarMeuHorario(ag) {
+    const ok = window.confirm('Cancelar este horário? Essa ação libera a vaga.');
+    if (!ok) return;
+    const { error } = await supabase
+      .from('agendamentos')
+      .update({ status: 'cancelado' })
+      .eq('id', ag.id);
+    if (error) { alert('Não consegui cancelar. Tenta de novo.'); return; }
+    carregarMeusHorarios();
+  }
+  function remarcarMeuHorario(ag) {
+    setServicoEscolhido({ id: ag.servico_id, nome: ag.servicos?.nome });
+    setBarbeiroEscolhido({ id: ag.barbeiro_id, nome: ag.barbeiros?.nome });
+    setAgRemarcando(ag);
+    setEtapa('dataHora');
+    setTela('agendar');
+  }
   async function carregarAgenda(data, barbRef) {
     const barb = barbRef || barbeiroLogado;
     setCarregandoAgenda(true);
@@ -1413,9 +1452,53 @@ function App() {
                       <p style={{ margin: 0, fontWeight: 500, fontSize: '16px' }}>Club Primen</p>
                       <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{clienteLogado?.membro_club ? 'Você é membro ✓' : 'Assinatura de vantagens'}</p>
                     </div>
+                    <div onClick={() => { carregarMeusHorarios(); setTela('meus-horarios'); }}
+                  style={{ border: '1px solid #333', borderRadius: '12px', padding: '24px', cursor: 'pointer', textAlign: 'center', marginBottom: '14px' }}>
+                  <div style={{ fontSize: '30px', marginBottom: '6px' }}>📋</div>
+                  <p style={{ margin: 0, fontWeight: 500, fontSize: '16px' }}>Meus horários</p>
+                  <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>Ver, remarcar ou cancelar</p>
+                </div>
                   </>
                 )}
 
+                {tela === 'meus-horarios' && (
+          <>
+            <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
+            <p style={estilos.titulo}>MEUS HORÁRIOS</p>
+
+            {carregandoMeus && <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>}
+
+            {!carregandoMeus && meusHorarios.length === 0 && (
+              <p style={{ color: '#8a8a8a', textAlign: 'center', marginTop: '20px' }}>
+                Você não tem horários marcados.
+              </p>
+            )}
+
+            {!carregandoMeus && meusHorarios.map((ag) => (
+              <div key={ag.id} style={{ border: '1px solid #333', borderRadius: '12px', padding: '16px', marginBottom: '12px' }}>
+                <p style={{ margin: '0 0 4px', fontWeight: 600, fontSize: '15px', color: '#f2f2f2' }}>
+                  {ag.servicos?.nome}
+                </p>
+                <p style={{ margin: '0 0 4px', fontSize: '13px', color: '#c9c9c9' }}>
+                  {ag.data.split('-').reverse().join('/')} às {ag.horario.slice(0, 5)}
+                </p>
+                <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#8a8a8a' }}>
+                  com {ag.barbeiros?.nome}
+                </p>
+                <button
+                  onClick={() => remarcarMeuHorario(ag)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 600, cursor: 'pointer', marginBottom: '8px' }}>
+                  Remarcar
+                </button>
+                <button
+                  onClick={() => cancelarMeuHorario(ag)}
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #e07a7a', background: 'transparent', color: '#e07a7a', fontSize: '13px', fontWeight: 600, cursor: 'pointer' }}>
+                  Cancelar
+                </button>
+              </div>
+            ))}
+          </>
+        )}
                 {tela === 'club' && (
                   <>
                     <div style={estilos.voltar} onClick={() => setTela('menu')}>← Menu</div>
