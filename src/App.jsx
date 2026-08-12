@@ -787,12 +787,12 @@ function App() {
     return (
       <>
         <div style={{ marginBottom: '12px', textAlign: 'center', position: 'relative' }}>
-          <p onClick={(e) => { const inp = e.currentTarget.parentNode.querySelector('input[type=date]'); if (inp) { if (inp.showPicker) inp.showPicker(); else inp.focus(); } }}
-            style={{ fontSize: '16px', fontWeight: 500, textTransform: 'capitalize', color: OURO, margin: 0, cursor: 'pointer', display: 'inline-block', borderBottom: '1px dashed #555', paddingBottom: '3px' }}>
+          <p style={{ fontSize: '16px', fontWeight: 500, textTransform: 'capitalize', color: OURO, margin: 0, display: 'inline-block', borderBottom: '1px dashed #555', paddingBottom: '3px' }}>
             📅 {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
           </p>
           <input type="date" value={dataParaISO(dataDono)} onChange={(e) => e.target.value && irParaDiaDono(e.target.value)}
-            style={{ position: 'absolute', left: '50%', bottom: 0, width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }} />
+            onClick={(e) => { if (e.currentTarget.showPicker) { try { e.currentTarget.showPicker(); } catch (err) {} } }}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer', border: 'none', padding: 0 }} />
         </div>
 
         {bloqueiosDoDia.map((b) => (
@@ -1416,7 +1416,7 @@ function App() {
                         <div onClick={() => setTemAcompanhante(true)}
                           style={{ border: temAcompanhante ? '1px solid #C9A227' : '1px solid #262626', background: temAcompanhante ? 'rgba(201,162,39,0.06)' : 'transparent', borderRadius: '10px', padding: '18px', marginBottom: '10px', cursor: 'pointer', textAlign: 'center' }}>
                           <div style={{ fontSize: '26px', marginBottom: '4px' }}>🧔‍♂️👦</div>
-                          <p style={{ margin: 0, fontWeight: 500 }}>Vou acompanhado (ex: meu filho)</p>
+                          <p style={{ margin: 0, fontWeight: 500 }}>Pai e filho</p>
                         </div>
                         {temAcompanhante && (
                           <div style={{ border: '1px solid #333', borderRadius: '10px', padding: '14px', marginTop: '6px' }}>
@@ -1430,7 +1430,7 @@ function App() {
                               </div>
                               <div onClick={() => setModoAcompanhante('cada')}
                                 style={{ flex: 1, textAlign: 'center', padding: '10px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', border: modoAcompanhante === 'cada' ? '1px solid #C9A227' : '1px solid #333', background: modoAcompanhante === 'cada' ? 'rgba(201,162,39,0.08)' : 'transparent', color: modoAcompanhante === 'cada' ? OURO : '#c9c9c9' }}>
-                                Cada um com o seu<br /><span style={{ fontSize: '10px', color: '#8a8a8a' }}>ao mesmo tempo</span>
+                                Cada um com seu barbeiro<br /><span style={{ fontSize: '10px', color: '#8a8a8a' }}>ao mesmo tempo</span>
                               </div>
                             </div>
                             <button disabled={!nomeFilho.trim()} onClick={() => setEtapa('servico')} style={estilos.botao(!!nomeFilho.trim())}>Continuar</button>
