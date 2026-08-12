@@ -164,6 +164,7 @@ function App() {
   const [erroEquipe, setErroEquipe] = useState('');
   const [barbeiroLogado, setBarbeiroLogado] = useState(null);
   const ehAdmin = barbeiroLogado?.nivel === 'admin';
+  const [avisoNovo, setAvisoNovo] = useState(null);
 
   const [dataDono, setDataDono] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()));
   const [agendaDoDia, setAgendaDoDia] = useState([]);
@@ -253,7 +254,49 @@ function App() {
     checarSessao();
   }, []);
 
+  function tocarSino() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const notas = [880, 1174.66];
+      notas.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const t = ctx.currentTime + i * 0.16;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.35, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.42);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t);
+        osc.stop(t + 0.45);
+      });
+      setTimeout(() => ctx.close(), 1200);
+    } catch (e) { /* som é opcional */ }
+  }
 
+  useEffect(() => {
+    if (!barbeiroLogado) return;
+    const canal = supabase
+      .channel('novos-agendamentos')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'agendamentos' }, async (payload) => {
+        const ag = payload.new;
+        if (!ag || ag.origem !== 'cliente' || ag.status !== 'confirmado') return;
+        if (!ehAdmin && ag.barbeiro_id !== barbeiroLogado.id) return;
+        let nomeCli = 'Cliente';
+        try {
+          const { data: c } = await supabase.from('clientes').select('nome').eq('id', ag.cliente_id).maybeSingle();
+          if (c?.nome) nomeCli = c.nome.split(' ')[0];
+        } catch (e) { /* usa fallback */ }
+        const [ah, am, ad] = (ag.data || '').split('-');
+        const dataFmt = ah ? `${ad}/${am}` : '';
+        tocarSino();
+        setAvisoNovo({ nome: nomeCli, horario: (ag.horario || '').slice(0, 5), data: dataFmt, dataISO: ag.data });
+        if (ag.data === dataParaISO(dataDono)) carregarAgenda(dataDono);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(canal); };
+  }, [barbeiroLogado, ehAdmin, dataDono]);
 
   function gradeDoDia(data) {
     const dow = data.getDay();
@@ -1972,6 +2015,17 @@ function App() {
                   <span style={{ fontSize: '11px', color: '#6b6b6b', cursor: 'pointer' }} onClick={sairDaEquipe}>Sair</span>
                 </div>
                 <p style={{ fontSize: '13px', color: '#f2f2f2', margin: '0 0 16px' }}>Olá, {barbeiroLogado?.nome?.split(' ')[0]} 👋 {!ehAdmin && <span style={{ fontSize: '11px', color: '#8a8a8a' }}>(acesso da equipe)</span>}</p>
+
+                {avisoNovo && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(201,162,39,0.12)', border: '1px solid ' + OURO, borderRadius: '10px', padding: '12px 14px', marginBottom: '16px' }}>
+                    <span style={{ fontSize: '20px' }}>🔔</span>
+                    <div style={{ flex: 1, lineHeight: 1.35 }}>
+                      <div style={{ color: OURO, fontWeight: 700, fontSize: '14px' }}>Novo agendamento</div>
+                      <div style={{ color: '#f2f2f2', fontSize: '13px' }}>{avisoNovo.nome} marcou {avisoNovo.horario}{avisoNovo.data ? ` · ${avisoNovo.data}` : ''}</div>
+                    </div>
+                    <span onClick={() => setAvisoNovo(null)} style={{ color: '#8a8a8a', fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>✕</span>
+                  </div>
+                )}
 
                 {ehAdmin && (
                   <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
