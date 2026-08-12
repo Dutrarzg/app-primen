@@ -145,6 +145,9 @@ function App() {
   const [horariosOcupados, setHorariosOcupados] = useState([]);
   const [ocupadosPorBarbeiro, setOcupadosPorBarbeiro] = useState({});
   const [faixaHorariosDia, setFaixaHorariosDia] = useState([]);
+  const [mostrarAlmoco, setMostrarAlmoco] = useState(false);
+  const [almocoIni, setAlmocoIni] = useState('');
+  const [almocoFim, setAlmocoFim] = useState('');
   const [diaFechadoCliente, setDiaFechadoCliente] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erroSalvar, setErroSalvar] = useState('');
@@ -272,6 +275,13 @@ function App() {
     return data < zero;
   }
 
+  function foraDaJanela(data) {
+    const zero = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+    const limite = new Date(zero);
+    limite.setDate(limite.getDate() + 30);
+    return data > limite;
+  }
+
   async function tentarEntrar() {
     setErroLogin('');
     if (!loginTel.trim() || !loginSenha.trim()) { setErroLogin('Preencha celular e senha.'); return; }
@@ -392,6 +402,14 @@ function App() {
         faixaHorarios = faixaHorarios.concat(listaDia.filter((h) => h >= ini && h < fim));
       });
     }
+    // almoço fixo de cada barbeiro vira horário ocupado dele (todo dia)
+    barbeiros.forEach((b) => {
+      if (!b.almoco_inicio) return;
+      const ini = b.almoco_inicio.slice(0, 5);
+      const fim = b.almoco_fim ? b.almoco_fim.slice(0, 5) : ini;
+      if (!porBarbeiro[b.id]) porBarbeiro[b.id] = [];
+      porBarbeiro[b.id] = porBarbeiro[b.id].concat(listaDia.filter((h) => h >= ini && h < fim));
+    });
     setOcupadosPorBarbeiro(porBarbeiro);
     setFaixaHorariosDia(faixaHorarios);
     // compat: horariosOcupados = ocupados do barbeiro do pai + faixas (usado quando não há acompanhante)
@@ -642,6 +660,21 @@ function App() {
     setDataDono(nova);
     setMostrarFormManual(false); setMostrarFormBloqueio(false);
     carregarAgenda(nova);
+  }
+
+  function abrirEditorAlmoco() {
+    const b = barbeiroLogado;
+    setAlmocoIni(b?.almoco_inicio ? b.almoco_inicio.slice(0, 5) : '');
+    setAlmocoFim(b?.almoco_fim ? b.almoco_fim.slice(0, 5) : '');
+    setMostrarAlmoco(!mostrarAlmoco);
+  }
+
+  async function salvarAlmoco() {
+    await supabase.from('barbeiros').update({ almoco_inicio: almocoIni || null, almoco_fim: almocoFim || null }).eq('id', barbeiroLogado.id);
+    setBarbeiroLogado({ ...barbeiroLogado, almoco_inicio: almocoIni || null, almoco_fim: almocoFim || null });
+    const { data } = await supabase.from('barbeiros').select('*').eq('ativo', true);
+    if (data) setBarbeiros(data);
+    setMostrarAlmoco(false);
   }
 
   function irParaDiaDono(dataISO) {
@@ -949,6 +982,28 @@ function App() {
           </div>
         )}
 
+        {barbeiroLogado && (
+          <>
+            <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={abrirEditorAlmoco}>
+              {mostrarAlmoco ? 'Cancelar' : '🍽️ Meu horário de almoço'}
+            </button>
+            {mostrarAlmoco && (
+              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 8px' }}>Esse intervalo fica indisponível pra agendar, todo dia. Pra mudar só num dia específico, use "bloquear horário".</p>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={almocoIni} onChange={(e) => setAlmocoIni(e.target.value)} />
+                  <span style={{ color: '#8a8a8a' }}>até</span>
+                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={almocoFim} onChange={(e) => setAlmocoFim(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarAlmoco}>Salvar</button>
+                  {(almocoIni || almocoFim) && <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={() => { setAlmocoIni(''); setAlmocoFim(''); }}>Limpar</button>}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '10px' }}>
           <p style={{ ...estilos.titulo, margin: 0 }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA'}</p>
           <div style={{ display: 'flex', gap: '4px' }}>
@@ -1004,6 +1059,14 @@ function App() {
             const grade = gradeDoDia(dataDono);
             const listaDia = (grade.periodos || []).flat();
             if (listaDia.length === 0) return itens.map(cardAg); // fallback (dia sem grade): só os agendados
+            // horários de almoço do barbeiro dessa coluna
+            const barbObj = barbeiros.find((b) => b.id === barbId);
+            const almocoSet = new Set();
+            if (barbObj?.almoco_inicio) {
+              const ai = barbObj.almoco_inicio.slice(0, 5);
+              const af = barbObj.almoco_fim ? barbObj.almoco_fim.slice(0, 5) : ai;
+              listaDia.filter((h) => h >= ai && h < af).forEach((h) => almocoSet.add(h));
+            }
             const inicioMap = {};
             const ocupadoSet = new Set();
             itens.forEach((a) => {
@@ -1014,11 +1077,17 @@ function App() {
               if (idx !== -1) for (let k = 1; k < slots; k++) { if (listaDia[idx + k]) ocupadoSet.add(listaDia[idx + k]); }
             });
             const linhas = [];
+            let almocoAberto = false;
             listaDia.forEach((h) => {
-              if (inicioMap[h]) linhas.push(cardAg(inicioMap[h]));
-              else if (!ocupadoSet.has(h)) linhas.push(cardVazio(h, barbId));
+              if (inicioMap[h]) { linhas.push(cardAg(inicioMap[h])); almocoAberto = false; }
+              else if (almocoSet.has(h)) {
+                if (!almocoAberto) { // mostra o bloco de almoço uma vez, no começo do intervalo
+                  linhas.push(<div key={'alm' + h} style={{ border: '1px solid #2a2a2a', borderRadius: '8px', padding: vistaAgenda === 'grade' ? '8px' : '8px 12px', marginBottom: vistaAgenda === 'grade' ? 0 : '6px', color: '#6b6b6b', textAlign: vistaAgenda === 'grade' ? 'center' : 'left', fontSize: '12px', background: 'rgba(255,255,255,0.02)' }}>🍽️ {h} · almoço</div>);
+                  almocoAberto = true;
+                }
+              }
+              else if (!ocupadoSet.has(h)) { linhas.push(cardVazio(h, barbId)); almocoAberto = false; }
             });
-            // agendamentos cujo horário não está na grade (ex: encaixe manual fora da grade) entram no fim
             itens.forEach((a) => { if (listaDia.indexOf(a.horario.slice(0, 5)) === -1) linhas.push(cardAg(a)); });
             return linhas;
           };
@@ -1707,7 +1776,7 @@ function App() {
                             if (!data) return <div key={i}></div>;
                             const dow = data.getDay();
                             const foraDoClub = servicoEhClub && (dow === 5 || dow === 6);
-                            const bloqueado = dow === 0 || ehPassado(data) || foraDoClub;
+                            const bloqueado = dow === 0 || ehPassado(data) || foraDaJanela(data) || foraDoClub;
                             const selecionada = dataEscolhida && data.getTime() === dataEscolhida.getTime();
                             return (
                               <div key={i} onClick={() => { if (!bloqueado) escolherData(data); }}
