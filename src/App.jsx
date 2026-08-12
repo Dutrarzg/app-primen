@@ -148,6 +148,11 @@ function App() {
   const [mostrarAlmoco, setMostrarAlmoco] = useState(false);
   const [almocoIni, setAlmocoIni] = useState('');
   const [almocoFim, setAlmocoFim] = useState('');
+  const [mostrarHorarioDia, setMostrarHorarioDia] = useState(false);
+  const [hdData, setHdData] = useState('');
+  const [hdIni, setHdIni] = useState('');
+  const [hdFim, setHdFim] = useState('');
+  const [hdBarbeiro, setHdBarbeiro] = useState('');
   const [diaFechadoCliente, setDiaFechadoCliente] = useState(false);
   const [salvando, setSalvando] = useState(false);
   const [erroSalvar, setErroSalvar] = useState('');
@@ -420,6 +425,15 @@ function App() {
       if (!porBarbeiro[b.id]) porBarbeiro[b.id] = [];
       porBarbeiro[b.id] = porBarbeiro[b.id].concat(listaDia.filter((h) => h >= ini && h < fim));
     });
+    // horário de trabalho do dia (exceção pontual): corta o que está fora do intervalo definido
+    const { data: horariosDia } = await supabase.from('horarios_dia').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
+    (horariosDia || []).forEach((hd) => {
+      const ini = hd.hora_inicio.slice(0, 5);
+      const fim = hd.hora_fim.slice(0, 5);
+      if (!porBarbeiro[hd.barbeiro_id]) porBarbeiro[hd.barbeiro_id] = [];
+      // tudo antes do início OU no fim/depois vira indisponível
+      porBarbeiro[hd.barbeiro_id] = porBarbeiro[hd.barbeiro_id].concat(listaDia.filter((h) => h < ini || h >= fim));
+    });
     setOcupadosPorBarbeiro(porBarbeiro);
     setFaixaHorariosDia(faixaHorarios);
     // compat: horariosOcupados = ocupados do barbeiro do pai + faixas (usado quando não há acompanhante)
@@ -685,6 +699,39 @@ function App() {
     const { data } = await supabase.from('barbeiros').select('*').eq('ativo', true);
     if (data) setBarbeiros(data);
     setMostrarAlmoco(false);
+  }
+
+  function abrirEditorHorarioDia() {
+    if (mostrarHorarioDia) { setMostrarHorarioDia(false); return; }
+    setHdData(dataParaISO(dataDono));
+    setHdIni(''); setHdFim('');
+    setHdBarbeiro(ehAdmin ? (barbeiroLogado?.id || '') : (barbeiroLogado?.id || ''));
+    setMostrarAlmoco(false);
+    setMostrarHorarioDia(true);
+  }
+
+  async function salvarHorarioDia() {
+    const alvo = ehAdmin ? (hdBarbeiro || barbeiroLogado?.id) : barbeiroLogado?.id;
+    if (!alvo) { alert('Escolha o barbeiro.'); return; }
+    if (!hdData) { alert('Escolha o dia.'); return; }
+    if (!hdIni || !hdFim) { alert('Preencha o horário de início e fim.'); return; }
+    if (hdFim <= hdIni) { alert('O fim precisa ser maior que o início.'); return; }
+    // upsert (unique barbeiro_id + data): apaga o anterior desse barbeiro/dia e insere
+    await supabase.from('horarios_dia').delete().eq('barbeiro_id', alvo).eq('data', hdData);
+    const { error } = await supabase.from('horarios_dia').insert({ barbeiro_id: alvo, data: hdData, hora_inicio: hdIni, hora_fim: hdFim });
+    if (error) { alert('Não consegui salvar. Tenta de novo.'); return; }
+    setMostrarHorarioDia(false);
+    const [ano, mes, dia] = hdData.split('-').map(Number);
+    setDataDono(new Date(ano, mes - 1, dia));
+    carregarAgenda(new Date(ano, mes - 1, dia));
+  }
+
+  async function limparHorarioDia() {
+    const alvo = ehAdmin ? (hdBarbeiro || barbeiroLogado?.id) : barbeiroLogado?.id;
+    if (!alvo || !hdData) { setMostrarHorarioDia(false); return; }
+    await supabase.from('horarios_dia').delete().eq('barbeiro_id', alvo).eq('data', hdData);
+    setMostrarHorarioDia(false);
+    carregarAgenda(dataDono);
   }
 
   function irParaDiaDono(dataISO) {
@@ -1008,6 +1055,36 @@ function App() {
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarAlmoco}>Salvar</button>
                   {(almocoIni || almocoFim) && <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={() => { setAlmocoIni(''); setAlmocoFim(''); }}>Limpar</button>}
+                </div>
+              </div>
+            )}
+
+            <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={abrirEditorHorarioDia}>
+              {mostrarHorarioDia ? 'Cancelar' : '🕐 Meu horário nesse dia'}
+            </button>
+            {mostrarHorarioDia && (
+              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 8px' }}>Pra um imprevisto: define o horário que você vai trabalhar SÓ nesse dia. Fora dele fica indisponível. O almoço continua valendo.</p>
+                {ehAdmin && (
+                  <>
+                    <div style={estilos.label}>Barbeiro</div>
+                    <select style={estilos.input} value={hdBarbeiro} onChange={(e) => setHdBarbeiro(e.target.value)}>
+                      <option value="">Escolha</option>
+                      {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
+                    </select>
+                  </>
+                )}
+                <div style={estilos.label}>Dia</div>
+                <input type="date" style={estilos.input} value={hdData} onChange={(e) => setHdData(e.target.value)} />
+                <div style={estilos.label}>Vou trabalhar das</div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={hdIni} onChange={(e) => setHdIni(e.target.value)} />
+                  <span style={{ color: '#8a8a8a' }}>até</span>
+                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={hdFim} onChange={(e) => setHdFim(e.target.value)} />
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarHorarioDia}>Salvar</button>
+                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={limparHorarioDia}>Remover</button>
                 </div>
               </div>
             )}
