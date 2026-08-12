@@ -45,6 +45,16 @@ const gradeSegundaPorBarbeiro = {
 
 const OURO = '#C9A227';
 const WHATSAPP_BARBEARIA = '5532984079998';
+const VAPID_PUBLIC_KEY = 'BJlutoQld4dExJJ0AmlGeKv6rgb4D5uUwd6OQrtBrm50S6165snLmmFnG93D4i1xmJWQmMCT8HsS4WbqV4xujXE';
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
 
 function telParaEmail(tel) {
   const nums = tel.replace(/\D/g, '');
@@ -165,6 +175,7 @@ function App() {
   const [barbeiroLogado, setBarbeiroLogado] = useState(null);
   const ehAdmin = barbeiroLogado?.nivel === 'admin';
   const [avisoNovo, setAvisoNovo] = useState(null);
+  const [pushStatus, setPushStatus] = useState('desconhecido');
 
   const [dataDono, setDataDono] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()));
   const [agendaDoDia, setAgendaDoDia] = useState([]);
@@ -273,6 +284,48 @@ function App() {
       });
       setTimeout(() => ctx.close(), 1200);
     } catch (e) { /* som é opcional */ }
+  }
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+    if (!('Notification' in window)) { setPushStatus('sem-suporte'); return; }
+    if (Notification.permission === 'granted') setPushStatus('ativo');
+    else if (Notification.permission === 'denied') setPushStatus('bloqueado');
+    else setPushStatus('inativo');
+  }, []);
+
+  async function ativarNotificacoes() {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        alert('Este navegador não suporta notificações. No iPhone, adicione o site à tela inicial e abra por lá.');
+        return;
+      }
+      const permissao = await Notification.requestPermission();
+      if (permissao !== 'granted') {
+        setPushStatus(permissao === 'denied' ? 'bloqueado' : 'inativo');
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+        });
+      }
+      const j = sub.toJSON();
+      await supabase.from('push_subs').upsert({
+        barbeiro_id: barbeiroLogado.id,
+        endpoint: j.endpoint,
+        p256dh: j.keys.p256dh,
+        auth: j.keys.auth,
+      }, { onConflict: 'endpoint' });
+      setPushStatus('ativo');
+    } catch (e) {
+      alert('Não consegui ativar as notificações. Tente novamente.');
+    }
   }
 
   useEffect(() => {
@@ -2025,6 +2078,20 @@ function App() {
                     </div>
                     <span onClick={() => setAvisoNovo(null)} style={{ color: '#8a8a8a', fontSize: '18px', cursor: 'pointer', padding: '0 4px' }}>✕</span>
                   </div>
+                )}
+
+                {pushStatus !== 'ativo' && pushStatus !== 'sem-suporte' && (
+                  <div onClick={ativarNotificacoes} style={{ display: 'flex', alignItems: 'center', gap: '10px', background: 'transparent', border: '1px dashed #444', borderRadius: '10px', padding: '11px 14px', marginBottom: '16px', cursor: 'pointer' }}>
+                    <span style={{ fontSize: '18px' }}>🔔</span>
+                    <div style={{ flex: 1, lineHeight: 1.35 }}>
+                      <div style={{ color: '#f2f2f2', fontWeight: 600, fontSize: '13px' }}>{pushStatus === 'bloqueado' ? 'Notificações bloqueadas' : 'Ativar notificações no celular'}</div>
+                      <div style={{ color: '#8a8a8a', fontSize: '11px' }}>{pushStatus === 'bloqueado' ? 'Libere nas configurações do navegador' : 'Receba um aviso mesmo com o app fechado'}</div>
+                    </div>
+                    {pushStatus !== 'bloqueado' && <span style={{ color: OURO, fontSize: '13px', fontWeight: 600 }}>Ativar</span>}
+                  </div>
+                )}
+                {pushStatus === 'ativo' && (
+                  <div style={{ fontSize: '11px', color: '#6b8a6b', marginBottom: '16px' }}>🔔 Notificações ativas neste aparelho</div>
                 )}
 
                 {ehAdmin && (
