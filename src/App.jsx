@@ -192,6 +192,16 @@ function App() {
 
   const [pagamentoAg, setPagamentoAg] = useState(null);
   const [pagamentoValor, setPagamentoValor] = useState('');
+  const [formaPagamento, setFormaPagamento] = useState('dinheiro');
+  const [vistaAgenda, setVistaAgenda] = useState('lista');
+  const [mostrarCalendarioDono, setMostrarCalendarioDono] = useState(false);
+  const [modalAg, setModalAg] = useState(null);
+  const [remarcandoDonoId, setRemarcandoDonoId] = useState(null);
+  const [remarcarAg, setRemarcarAg] = useState(null);
+  const [remarcarData, setRemarcarData] = useState('');
+  const [remarcarHorario, setRemarcarHorario] = useState('');
+  const [remarcarOcupados, setRemarcarOcupados] = useState([]);
+  const [remarcarSalvando, setRemarcarSalvando] = useState(false);
   const [agsPagos, setAgsPagos] = useState([]);
 
   const [mostrarFinanceiro, setMostrarFinanceiro] = useState(false);
@@ -568,6 +578,7 @@ function App() {
 
   function abrirPagamento(ag) {
     setPagamentoAg(ag);
+    setFormaPagamento('dinheiro');
     const valor = ag.servicosTotal != null ? ag.servicosTotal : (ag.servicos?.preco || 0);
     setPagamentoValor(valor ? String(valor).replace('.', ',') : '');
   }
@@ -577,7 +588,7 @@ function App() {
     await supabase.from('movimentacoes').insert({
       descricao: `Atendimento: ${pagamentoAg.servicosNomes || pagamentoAg.servicos?.nome || 'serviço'} (${pagamentoAg.clientes?.nome || 'cliente'})`,
       valor: valorNum, categoria: 'servico', barbeiro_id: pagamentoAg.barbeiro_id || null,
-      agendamento_id: pagamentoAg.id, data: dataParaISO(dataDono),
+      agendamento_id: pagamentoAg.id, data: dataParaISO(dataDono), forma_pagamento: formaPagamento,
     });
     setPagamentoAg(null);
     carregarAgenda(dataDono);
@@ -627,6 +638,85 @@ function App() {
     setDataDono(nova);
     setMostrarFormManual(false); setMostrarFormBloqueio(false);
     carregarAgenda(nova);
+  }
+
+  function irParaDiaDono(dataISO) {
+    const [ano, mes, dia] = dataISO.split('-').map(Number);
+    const nova = new Date(ano, mes - 1, dia);
+    setDataDono(nova);
+    setMostrarCalendarioDono(false);
+    setMostrarFormManual(false); setMostrarFormBloqueio(false);
+    carregarAgenda(nova);
+  }
+
+  async function cancelarAgendamentoDono(a) {
+    const quem = a.nome_acompanhante || a.clientes?.nome || 'cliente';
+    if (!confirm('Cancelar o horário de ' + quem + '?')) return;
+    await supabase.from('agendamentos').update({ status: 'cancelado' }).eq('id', a.id);
+    carregarAgenda(dataDono);
+  }
+
+  function whatsappCliente(a) {
+    const tel = (a.clientes?.telefone || '').replace(/\D/g, '');
+    if (tel.length < 10) { alert('Esse cliente não tem WhatsApp cadastrado.'); return; }
+    const nome = (a.clientes?.nome || '').split(' ')[0];
+    const dataTexto = dataDono.toLocaleDateString('pt-BR');
+    const msg = `Olá ${nome}! Aqui é da Primen Barbershop, sobre seu horário de ${a.horario.slice(0, 5)} no dia ${dataTexto}.`;
+    window.open(`https://wa.me/55${tel}?text=${encodeURIComponent(msg)}`, '_blank');
+  }
+
+  function remarcarPeloDono(a) {
+    setRemarcarAg(a);
+    setRemarcarData(dataParaISO(dataDono));
+    setRemarcarHorario('');
+    setModalAg(null);
+    carregarOcupadosRemarcar(dataParaISO(dataDono), a);
+  }
+
+  async function carregarOcupadosRemarcar(dataISO, a) {
+    setRemarcarHorario('');
+    const barbId = a.barbeiro_id;
+    const [ano, mes, dia] = dataISO.split('-').map(Number);
+    const dataObj = new Date(ano, mes - 1, dia);
+    const gradeDia = gradeDoDia(dataObj);
+    const listaDia = (gradeDia.periodos || []).flat();
+    // agendamentos do mesmo barbeiro no dia (menos o próprio, que vai ser cancelado)
+    let query = supabase.from('agendamentos').select('id, horario, barbeiro_id, duracao_min').eq('data', dataISO).neq('status', 'cancelado');
+    if (barbId) query = query.eq('barbeiro_id', barbId);
+    const { data: ags } = await query;
+    let ocup = [];
+    (ags || []).forEach((o) => {
+      if (o.id === a.id) return; // ignora o próprio agendamento
+      const ini = o.horario.slice(0, 5);
+      const slots = Math.max(1, Math.ceil((o.duracao_min || 15) / 15));
+      const idx = listaDia.indexOf(ini);
+      if (idx === -1) { ocup.push(ini); return; }
+      for (let k = 0; k < slots; k++) if (listaDia[idx + k]) ocup.push(listaDia[idx + k]);
+    });
+    // bloqueios de faixa do dia
+    const { data: bloqs } = await supabase.from('dias_bloqueados').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
+    (bloqs || []).forEach((b) => {
+      if (b.barbeiro_id && b.barbeiro_id !== barbId) return;
+      if (b.hora_inicio) {
+        const ini = b.hora_inicio.slice(0, 5); const fim = b.hora_fim ? b.hora_fim.slice(0, 5) : ini;
+        ocup = ocup.concat(listaDia.filter((h) => h >= ini && h < fim));
+      } else {
+        ocup = ocup.concat(listaDia); // dia fechado
+      }
+    });
+    setRemarcarOcupados(ocup);
+  }
+
+  async function salvarRemarcacao() {
+    if (!remarcarHorario) { alert('Escolha o novo horário.'); return; }
+    setRemarcarSalvando(true);
+    const { error } = await supabase.from('agendamentos')
+      .update({ data: remarcarData, horario: remarcarHorario })
+      .eq('id', remarcarAg.id);
+    setRemarcarSalvando(false);
+    if (error) { alert('Não consegui remarcar. Tenta outro horário.'); return; }
+    setRemarcarAg(null);
+    carregarAgenda(dataDono);
   }
 
   async function salvarBloqueio() {
@@ -696,18 +786,20 @@ function App() {
   function BlocoAgenda() {
     return (
       <>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-          <span onClick={() => mudarDiaDono(-1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>‹</span>
-          <span style={{ fontSize: '14px', textTransform: 'capitalize', textAlign: 'center' }}>
-            {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
-          </span>
-          <span onClick={() => mudarDiaDono(1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 10px' }}>›</span>
+        <div style={{ marginBottom: '12px', textAlign: 'center', position: 'relative' }}>
+          <p onClick={(e) => { const inp = e.currentTarget.parentNode.querySelector('input[type=date]'); if (inp) { if (inp.showPicker) inp.showPicker(); else inp.focus(); } }}
+            style={{ fontSize: '16px', fontWeight: 500, textTransform: 'capitalize', color: OURO, margin: 0, cursor: 'pointer', display: 'inline-block', borderBottom: '1px dashed #555', paddingBottom: '3px' }}>
+            📅 {dataDono.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' })}
+          </p>
+          <input type="date" value={dataParaISO(dataDono)} onChange={(e) => e.target.value && irParaDiaDono(e.target.value)}
+            style={{ position: 'absolute', left: '50%', bottom: 0, width: '1px', height: '1px', opacity: 0, pointerEvents: 'none' }} />
         </div>
 
         {bloqueiosDoDia.map((b) => (
-          <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(163,61,61,0.12)', border: '1px solid #a33d3d', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
-            <span style={{ fontSize: '12px', color: '#e07a7a' }}>
-              {b.barbeiro_id === null ? 'Barbearia fechada' : 'Fechado: ' + (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome || 'barbeiro')}
+          <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(163,61,61,0.12)', border: '1px solid #a33d3d', borderRadius: '8px', padding: '8px 10px', marginBottom: '6px' }}>
+            <span style={{ fontSize: '11px', color: '#e07a7a' }}>
+              {b.hora_inicio ? b.hora_inicio.slice(0, 5) + '–' + (b.hora_fim ? b.hora_fim.slice(0, 5) : '') + ' · ' : 'Dia todo · '}
+              {b.barbeiro_id === null ? 'Barbearia' : (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome?.split(' ')[0] || 'barbeiro')}
               {b.motivo ? ' · ' + b.motivo : ''}
             </span>
             {ehAdmin && <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>}
@@ -745,43 +837,176 @@ function App() {
           </div>
         )}
 
-        <p style={{ ...estilos.titulo, marginTop: '16px' }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA DO DIA'}</p>
-        {carregandoAgenda ? (
-          <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>
-        ) : agendaDoDia.length === 0 ? (
-          <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
-            Nenhum agendamento neste dia.
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '10px' }}>
+          <p style={{ ...estilos.titulo, margin: 0 }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA'}</p>
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <span onClick={() => setVistaAgenda('lista')} style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '6px', cursor: 'pointer', border: vistaAgenda === 'lista' ? '1px solid #C9A227' : '1px solid #333', color: vistaAgenda === 'lista' ? OURO : '#8a8a8a' }}>Lista</span>
+            <span onClick={() => setVistaAgenda('grade')} style={{ fontSize: '11px', padding: '4px 8px', borderRadius: '6px', cursor: 'pointer', border: vistaAgenda === 'grade' ? '1px solid #C9A227' : '1px solid #333', color: vistaAgenda === 'grade' ? OURO : '#8a8a8a' }}>Grade</span>
           </div>
-        ) : (
-          agendaDoDia.map((a) => {
+        </div>
+
+        {(() => {
+          if (carregandoAgenda) return <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>;
+          if (agendaDoDia.length === 0) return (
+            <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
+              Nenhum agendamento neste dia.
+            </div>
+          );
+
+          // card de LISTA (compacto, com whatsapp/cancelar e o form de pagamento inline)
+          const cardLista = (a) => {
             const pago = agsPagos.includes(a.id);
             return (
-              <div key={a.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <p style={{ margin: 0, fontWeight: 500, color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
-                  {a.origem === 'dono' && <span style={{ fontSize: '10px', color: '#6b6b6b' }}>manual</span>}
+              <div key={a.id} onClick={() => setModalAg(a)}
+                style={{ border: pago ? '1px solid #2f5a3f' : '1px solid #262626', background: pago ? 'rgba(92,182,122,0.06)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '6px', cursor: 'pointer' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
+                  <span style={{ fontWeight: 600, color: OURO, fontSize: '13px', flexShrink: 0 }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</span>
+                  <span style={{ fontSize: '13px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}{a.nome_acompanhante && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> (acomp.)</span>}{!a.nome_acompanhante && a.grupo_id && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> +1</span>}</span>
                 </div>
-                <p style={{ margin: '4px 0 0', fontSize: '14px' }}>{a.nome_acompanhante ? `${a.nome_acompanhante} ` : (a.clientes?.nome || 'Cliente')}{a.nome_acompanhante && <span style={{ fontSize: '10px', color: '#8a8a8a' }}>(acomp. de {a.clientes?.nome?.split(' ')[0]})</span>}{!a.nome_acompanhante && a.grupo_id && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> +acomp.</span>}</p>
-                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#8a8a8a' }}>{a.servicosNomes || a.servicos?.nome} · {a.barbeiros?.nome || 'Sem preferência'}</p>
-                {a.clientes?.telefone && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
-                {pago ? (
-                  <p style={{ margin: '8px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago</p>
-                ) : pagamentoAg?.id === a.id ? (
-                  <div style={{ marginTop: '10px', borderTop: '1px solid #262626', paddingTop: '10px' }}>
-                    <div style={estilos.label}>Valor pago (R$)</div>
-                    <input style={estilos.input} value={pagamentoValor} onChange={(e) => setPagamentoValor(e.target.value)} inputMode="decimal" />
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={confirmarPagamento}>Confirmar</button>
-                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagamentoAg(null)}>Cancelar</button>
-                    </div>
+                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}{pago ? ' · ✓ pago' : ''}</p>
+              </div>
+            );
+          };
+
+          // card de GRADE (mini, abre modal ao clicar)
+          const cardGrade = (a) => {
+            const pago = agsPagos.includes(a.id);
+            return (
+              <div key={a.id} onClick={() => setModalAg(a)}
+                style={{ border: pago ? '1px solid #2f5a3f' : '1px solid #262626', background: pago ? 'rgba(92,182,122,0.08)' : 'rgba(201,162,39,0.04)', borderRadius: '8px', padding: '8px', cursor: 'pointer' }}>
+                <p style={{ margin: 0, fontWeight: 600, fontSize: '12px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
+                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}</p>
+                <p style={{ margin: '1px 0 0', fontSize: '10px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}</p>
+                {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago</p>}
+              </div>
+            );
+          };
+
+          const renderCards = (lista) => vistaAgenda === 'grade'
+            ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>{lista.map(cardGrade)}</div>
+            : <div>{lista.map(cardLista)}</div>;
+
+          // em "Todos" (admin sem filtro): separa por barbeiro em colunas
+          const emTodos = ehAdmin && filtroBarbeiro === 'todos';
+          if (emTodos) {
+            const colunas = [...barbeiros].sort((a, b) => (b.nivel === 'admin' ? 1 : 0) - (a.nivel === 'admin' ? 1 : 0)).map((b) => ({ barbeiro: b, itens: agendaDoDia.filter((a) => a.barbeiro_id === b.id) }));
+            const semBarbeiro = agendaDoDia.filter((a) => !a.barbeiro_id);
+            return (
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
+                {colunas.map(({ barbeiro, itens }) => (
+                  <div key={barbeiro.id} style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: '12px', fontWeight: 600, color: OURO, textAlign: 'center', margin: '0 0 8px' }}>{barbeiro.nome?.split(' ')[0]}</p>
+                    {itens.length === 0 ? <p style={{ fontSize: '11px', color: '#6b6b6b', textAlign: 'center' }}>—</p> : renderCards(itens)}
                   </div>
-                ) : (
-                  <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirPagamento(a)}>Marcar como pago</button>
+                ))}
+                {semBarbeiro.length > 0 && (
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: '12px', fontWeight: 600, color: '#8a8a8a', textAlign: 'center', margin: '0 0 8px' }}>Sem pref.</p>
+                    {renderCards(semBarbeiro)}
+                  </div>
                 )}
               </div>
             );
-          })
-        )}
+          }
+          return renderCards(agendaDoDia);
+        })()}
+
+        {modalAg && (() => {
+          const a = modalAg;
+          const pago = agsPagos.includes(a.id);
+          const aberto = pagamentoAg?.id === a.id;
+          return (
+            <div onClick={() => { setModalAg(null); setPagamentoAg(null); }}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px' }}>
+              <div onClick={(e) => e.stopPropagation()}
+                style={{ background: '#161616', border: '1px solid #333', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '340px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '18px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
+                  <span onClick={() => { setModalAg(null); setPagamentoAg(null); }} style={{ fontSize: '18px', color: '#8a8a8a', cursor: 'pointer', lineHeight: 1 }}>×</span>
+                </div>
+                <p style={{ margin: '0 0 2px', fontSize: '15px', color: '#f2f2f2' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}{a.nome_acompanhante && <span style={{ fontSize: '11px', color: '#8a8a8a' }}> (acomp. de {a.clientes?.nome?.split(' ')[0]})</span>}</p>
+                <p style={{ margin: '0 0 2px', fontSize: '13px', color: '#c9c9c9' }}>{a.servicosNomes || a.servicos?.nome}</p>
+                <p style={{ margin: '0 0 2px', fontSize: '12px', color: '#8a8a8a' }}>{a.barbeiros?.nome || 'Sem preferência'}</p>
+                {a.clientes?.telefone && !a.clientes.telefone.startsWith('manual-') && <p style={{ margin: 0, fontSize: '12px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
+                {pago && <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago</p>}
+
+                {aberto ? (
+                  <div style={{ marginTop: '14px', borderTop: '1px solid #262626', paddingTop: '12px' }}>
+                    <div style={estilos.label}>Valor pago (R$)</div>
+                    <input style={estilos.input} value={pagamentoValor} onChange={(e) => setPagamentoValor(e.target.value)} inputMode="decimal" />
+                    <div style={estilos.label}>Forma de pagamento</div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                      {[['dinheiro', 'Dinheiro'], ['pix', 'Pix'], ['credito', 'Crédito'], ['debito', 'Débito'], ['dividir', 'Dividir'], ['assinatura', 'Assinatura'], ['pacote', 'Pacote']].map(([id, label]) => (
+                        <span key={id} onClick={() => setFormaPagamento(id)} style={{ fontSize: '11px', padding: '6px 10px', borderRadius: '6px', cursor: 'pointer', border: formaPagamento === id ? '1px solid #C9A227' : '1px solid #333', background: formaPagamento === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: formaPagamento === id ? OURO : '#c9c9c9' }}>{label}</span>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={() => { confirmarPagamento(); setModalAg(null); }}>Confirmar</button>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagamentoAg(null)}>Voltar</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ marginTop: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {a.clientes?.telefone && !a.clientes.telefone.startsWith('manual-') && (
+                      <button onClick={() => whatsappCliente(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>💬 WhatsApp do cliente</button>
+                    )}
+                    {!pago && <button onClick={() => abrirPagamento(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Marcar como pago</button>}
+                    <button onClick={() => remarcarPeloDono(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #C9A227', background: 'transparent', color: OURO, fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Remarcar</button>
+                    <button onClick={() => { cancelarAgendamentoDono(a); setModalAg(null); }} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #a33d3d', background: 'transparent', color: '#e07a7a', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Cancelar horário</button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {remarcarAg && (() => {
+          const [ano, mes, dia] = remarcarData.split('-').map(Number);
+          const dataObj = new Date(ano, mes - 1, dia);
+          const gradeDia = gradeDoDia(dataObj);
+          const listaDia = (gradeDia.periodos || []).flat();
+          const dur = remarcarAg.duracao_min || 15;
+          const slots = Math.max(1, Math.ceil(dur / 15));
+          const hoje0 = new Date(); hoje0.setHours(0, 0, 0, 0);
+          const ehHoje = dataObj.getTime() === hoje0.getTime();
+          const agoraMin = new Date().getHours() * 60 + new Date().getMinutes();
+          const disponivel = (h) => {
+            const idx = listaDia.indexOf(h);
+            if (idx === -1) return false;
+            for (let k = 0; k < slots; k++) {
+              const slot = listaDia[idx + k];
+              if (!slot) return false;
+              if (remarcarOcupados.includes(slot)) return false;
+            }
+            if (ehHoje) { const [hh, mm] = h.split(':').map(Number); if (hh * 60 + mm <= agoraMin) return false; }
+            return true;
+          };
+          return (
+            <div onClick={() => setRemarcarAg(null)}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px' }}>
+              <div onClick={(e) => e.stopPropagation()}
+                style={{ background: '#161616', border: '1px solid #333', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '360px', maxHeight: '85vh', overflowY: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                  <p style={{ margin: 0, fontWeight: 700, fontSize: '16px', color: OURO }}>Remarcar</p>
+                  <span onClick={() => setRemarcarAg(null)} style={{ fontSize: '18px', color: '#8a8a8a', cursor: 'pointer' }}>×</span>
+                </div>
+                <p style={{ margin: '0 0 12px', fontSize: '13px', color: '#c9c9c9' }}>{remarcarAg.nome_acompanhante || remarcarAg.clientes?.nome} · {remarcarAg.servicosNomes || remarcarAg.servicos?.nome}</p>
+                <div style={estilos.label}>Novo dia</div>
+                <input type="date" style={estilos.input} value={remarcarData} onChange={(e) => { if (e.target.value) { setRemarcarData(e.target.value); carregarOcupadosRemarcar(e.target.value, remarcarAg); } }} />
+                <div style={estilos.label}>Novo horário</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '14px' }}>
+                  {listaDia.map((h) => {
+                    const ok = disponivel(h);
+                    const sel = remarcarHorario === h;
+                    if (!ok) return <div key={h} style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', color: '#4a4a4a', border: '1px solid #1f1f1f', textDecoration: 'line-through' }}>{h}</div>;
+                    return <div key={h} onClick={() => setRemarcarHorario(h)} style={{ textAlign: 'center', fontSize: '11px', padding: '8px 0', borderRadius: '8px', cursor: 'pointer', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent' }}>{h}</div>;
+                  })}
+                </div>
+                <button disabled={!remarcarHorario || remarcarSalvando} onClick={salvarRemarcacao} style={estilos.botao(!!remarcarHorario && !remarcarSalvando)}>{remarcarSalvando ? 'Salvando...' : 'Confirmar remarcação'}</button>
+              </div>
+            </div>
+          );
+        })()}
       </>
     );
   }
@@ -1018,10 +1243,21 @@ function App() {
   const slotsFilho = Math.max(1, Math.ceil(duracaoFilho / 15));
 
   // slots livres pra um barbeiro específico a partir do índice idx (n slots seguidos)
+  function horarioJaPassou(h) {
+    if (!dataEscolhida) return false;
+    const hoje0 = new Date(); hoje0.setHours(0, 0, 0, 0);
+    const dia0 = new Date(dataEscolhida); dia0.setHours(0, 0, 0, 0);
+    if (dia0.getTime() !== hoje0.getTime()) return false; // só bloqueia no dia de hoje
+    const [hh, mm] = h.slice(0, 5).split(':').map(Number);
+    const agora = new Date();
+    return (hh * 60 + mm) <= (agora.getHours() * 60 + agora.getMinutes());
+  }
+
   function slotsLivres(idx, n, todosHorarios, ocupadosBarbeiro) {
     for (let k = 0; k < n; k++) {
       const slot = todosHorarios[idx + k];
       if (!slot) return false;
+      if (k === 0 && horarioJaPassou(slot)) return false;
       if (faixaHorariosDia.includes(slot)) return false;
       if (ocupadosBarbeiro.includes(slot)) return false;
     }
