@@ -166,6 +166,10 @@ function App() {
   const [mostrarFormManual, setMostrarFormManual] = useState(false);
   const [manualNome, setManualNome] = useState('');
   const [manualTel, setManualTel] = useState('');
+  const [manualModoCliente, setManualModoCliente] = useState('cadastrado');
+  const [manualClienteId, setManualClienteId] = useState(null);
+  const [buscaCliente, setBuscaCliente] = useState('');
+  const [listaClientes, setListaClientes] = useState([]);
   const [manualServico, setManualServico] = useState('');
   const [manualBarbeiro, setManualBarbeiro] = useState('');
   const [manualHorario, setManualHorario] = useState('');
@@ -741,21 +745,57 @@ function App() {
     carregarAgenda(dataDono);
   }
 
+  async function encaixarHorario(h, barbeiroId) {
+    setMostrarFormBloqueio(false);
+    setManualNome(''); setManualTel(''); setManualServico(''); setManualHorario(h);
+    setManualBarbeiro(barbeiroId || '');
+    setManualClienteId(null); setBuscaCliente(''); setManualModoCliente('cadastrado'); setErroManual('');
+    setRemarcandoDonoId(null);
+    const { data } = await supabase.from('clientes').select('id, nome, telefone').order('nome', { ascending: true });
+    setListaClientes(data || []);
+    setMostrarFormManual(true);
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function abrirFormManual() {
+    if (mostrarFormManual) { setMostrarFormManual(false); return; }
+    setMostrarFormBloqueio(false);
+    setManualNome(''); setManualTel(''); setManualServico(''); setManualBarbeiro(''); setManualHorario('');
+    setManualClienteId(null); setBuscaCliente(''); setManualModoCliente('cadastrado'); setErroManual('');
+    setRemarcandoDonoId(null);
+    const { data } = await supabase.from('clientes').select('id, nome, telefone').order('nome', { ascending: true });
+    setListaClientes(data || []);
+    setMostrarFormManual(true);
+  }
+
+  function escolherClienteManual(c) {
+    setManualClienteId(c.id);
+    setManualNome(c.nome || '');
+    setManualTel(c.telefone && !c.telefone.startsWith('manual-') ? c.telefone : '');
+    setBuscaCliente('');
+  }
+
   async function salvarAgendamentoManual() {
     setErroManual('');
-    if (!manualNome.trim() || !manualServico || !manualHorario.trim()) {
-      setErroManual('Preencha nome, serviço e horário.'); return;
+    if (!manualServico || !manualHorario.trim()) {
+      setErroManual('Preencha serviço e horário.'); return;
     }
-    const { data: cliente, error: erroCli } = await supabase.from('clientes')
-      .insert({ nome: manualNome.trim(), telefone: manualTel.trim() || ('manual-' + Date.now()) }).select().single();
-    if (erroCli) { setErroManual('Erro ao cadastrar cliente.'); return; }
+    let clienteId = manualClienteId;
+    if (!clienteId) {
+      if (!manualNome.trim()) { setErroManual('Escolha ou digite o cliente.'); return; }
+      const { data: cliente, error: erroCli } = await supabase.from('clientes')
+        .insert({ nome: manualNome.trim(), telefone: manualTel.trim() || ('manual-' + Date.now()) }).select().single();
+      if (erroCli) { setErroManual('Erro ao cadastrar cliente.'); return; }
+      clienteId = cliente.id;
+    }
     const barbId = ehAdmin ? (manualBarbeiro || null) : barbeiroLogado.id;
     const { error: erroAg } = await supabase.from('agendamentos').insert({
-      cliente_id: cliente.id, barbeiro_id: barbId, servico_id: manualServico,
+      cliente_id: clienteId, barbeiro_id: barbId, servico_id: manualServico,
       data: dataParaISO(dataDono), horario: manualHorario.trim(), status: 'confirmado', origem: 'dono',
     });
     if (erroAg) { setErroManual('Esse horário já está ocupado.'); return; }
     setManualNome(''); setManualTel(''); setManualServico(''); setManualBarbeiro(''); setManualHorario('');
+    setManualClienteId(null); setBuscaCliente('');
     setMostrarFormManual(false);
     carregarAgenda(dataDono);
   }
@@ -806,16 +846,55 @@ function App() {
           </div>
         ))}
 
-        <button style={estilos.botaoSec} onClick={() => { setMostrarFormManual(!mostrarFormManual); setMostrarFormBloqueio(false); }}>
+        <button style={estilos.botaoSec} onClick={abrirFormManual}>
           {mostrarFormManual ? 'Cancelar' : '+ Agendar para cliente'}
         </button>
 
         {mostrarFormManual && (
           <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-            <div style={estilos.label}>Nome do cliente</div>
-            <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
-            <div style={estilos.label}>WhatsApp (opcional)</div>
-            <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+              <span onClick={() => { setManualModoCliente('cadastrado'); setManualClienteId(null); setManualNome(''); setManualTel(''); }}
+                style={{ flex: 1, textAlign: 'center', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', border: manualModoCliente === 'cadastrado' ? '1px solid #C9A227' : '1px solid #333', background: manualModoCliente === 'cadastrado' ? 'rgba(201,162,39,0.08)' : 'transparent', color: manualModoCliente === 'cadastrado' ? OURO : '#c9c9c9' }}>Cliente cadastrado</span>
+              <span onClick={() => { setManualModoCliente('novo'); setManualClienteId(null); setManualNome(''); setManualTel(''); }}
+                style={{ flex: 1, textAlign: 'center', padding: '8px', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', border: manualModoCliente === 'novo' ? '1px solid #C9A227' : '1px solid #333', background: manualModoCliente === 'novo' ? 'rgba(201,162,39,0.08)' : 'transparent', color: manualModoCliente === 'novo' ? OURO : '#c9c9c9' }}>Cliente novo</span>
+            </div>
+
+            {manualModoCliente === 'cadastrado' ? (
+              manualClienteId ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #C9A227', borderRadius: '6px', padding: '10px', marginBottom: '10px', background: 'rgba(201,162,39,0.06)' }}>
+                  <div>
+                    <p style={{ margin: 0, fontSize: '14px', color: '#f2f2f2' }}>{manualNome}</p>
+                    {manualTel && <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{manualTel}</p>}
+                  </div>
+                  <span onClick={() => { setManualClienteId(null); setManualNome(''); setManualTel(''); }} style={{ fontSize: '12px', color: '#e07a7a', cursor: 'pointer' }}>trocar</span>
+                </div>
+              ) : (
+                <>
+                  <div style={estilos.label}>🔍 Buscar cliente pelo nome</div>
+                  <input style={estilos.input} value={buscaCliente} onChange={(e) => setBuscaCliente(e.target.value)} placeholder="Digite o nome..." />
+                  {buscaCliente.trim() && (
+                    <div style={{ border: '1px solid #262626', borderRadius: '6px', marginBottom: '10px', maxHeight: '160px', overflowY: 'auto' }}>
+                      {listaClientes.filter((c) => c.nome?.toLowerCase().includes(buscaCliente.trim().toLowerCase())).slice(0, 30).map((c) => (
+                        <div key={c.id} onClick={() => escolherClienteManual(c)} style={{ padding: '8px 10px', borderBottom: '1px solid #1f1f1f', cursor: 'pointer', fontSize: '13px' }}>
+                          {c.nome}{c.telefone && !c.telefone.startsWith('manual-') ? <span style={{ fontSize: '11px', color: '#8a8a8a' }}> · {c.telefone}</span> : ''}
+                        </div>
+                      ))}
+                      {listaClientes.filter((c) => c.nome?.toLowerCase().includes(buscaCliente.trim().toLowerCase())).length === 0 && (
+                        <p style={{ padding: '8px 10px', margin: 0, fontSize: '12px', color: '#6b6b6b' }}>Nenhum cliente encontrado. Use "Cliente novo".</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )
+            ) : (
+              <>
+                <div style={estilos.label}>Nome do cliente</div>
+                <input style={estilos.input} value={manualNome} onChange={(e) => setManualNome(e.target.value)} placeholder="Nome" />
+                <div style={estilos.label}>WhatsApp (opcional)</div>
+                <input style={estilos.input} value={manualTel} onChange={(e) => setManualTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+              </>
+            )}
+
             <div style={estilos.label}>Serviço</div>
             <select style={estilos.input} value={manualServico} onChange={(e) => setManualServico(e.target.value)}>
               <option value="">Escolha</option>
@@ -830,8 +909,41 @@ function App() {
                 </select>
               </>
             )}
-            <div style={estilos.label}>Horário (ex: 15:20)</div>
-            <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />
+            <div style={estilos.label}>Horário</div>
+            {(() => {
+              const grade = gradeDoDia(dataDono);
+              const listaDia = (grade.periodos || []).flat();
+              if (grade.precisaBarbeiro || grade.naoAtende || listaDia.length === 0) {
+                return <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />;
+              }
+              const barbSel = ehAdmin ? manualBarbeiro : (barbeiroLogado?.id || '');
+              // ocupados: agendamentos do dia do barbeiro escolhido (expandidos por duração)
+              const ocup = new Set();
+              agendaDoDia.forEach((a) => {
+                if (barbSel && a.barbeiro_id !== barbSel) return;
+                const ini = a.horario.slice(0, 5);
+                const slots = Math.max(1, Math.ceil((a.duracao_min || 15) / 15));
+                const idx = listaDia.indexOf(ini);
+                if (idx === -1) { ocup.add(ini); return; }
+                for (let k = 0; k < slots; k++) if (listaDia[idx + k]) ocup.add(listaDia[idx + k]);
+              });
+              // passados (se o dia da agenda for hoje)
+              const hoje0 = new Date(); hoje0.setHours(0, 0, 0, 0);
+              const diaAg = new Date(dataDono); diaAg.setHours(0, 0, 0, 0);
+              const ehHoje = diaAg.getTime() === hoje0.getTime();
+              const agoraMin = new Date().getHours() * 60 + new Date().getMinutes();
+              return (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginBottom: '10px' }}>
+                  {listaDia.map((h) => {
+                    const passou = ehHoje && (() => { const [hh, mm] = h.split(':').map(Number); return hh * 60 + mm <= agoraMin; })();
+                    const indisp = ocup.has(h) || passou;
+                    const sel = manualHorario === h;
+                    if (indisp) return <div key={h} style={{ textAlign: 'center', fontSize: '11px', padding: '7px 0', borderRadius: '6px', color: '#4a4a4a', border: '1px solid #1f1f1f', textDecoration: 'line-through' }}>{h}</div>;
+                    return <div key={h} onClick={() => setManualHorario(h)} style={{ textAlign: 'center', fontSize: '11px', padding: '7px 0', borderRadius: '6px', cursor: 'pointer', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent' }}>{h}</div>;
+                  })}
+                </div>
+              );
+            })()}
             {erroManual && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroManual}</p>}
             <button style={estilos.botao(true)} onClick={salvarAgendamentoManual}>Salvar agendamento</button>
           </div>
@@ -847,15 +959,20 @@ function App() {
 
         {(() => {
           if (carregandoAgenda) return <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>;
-          if (agendaDoDia.length === 0) return (
-            <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '24px', color: '#6b6b6b', fontSize: '13px' }}>
-              Nenhum agendamento neste dia.
-            </div>
-          );
 
-          // card de LISTA (compacto, com whatsapp/cancelar e o form de pagamento inline)
-          const cardLista = (a) => {
+          const cardAg = (a) => {
             const pago = agsPagos.includes(a.id);
+            if (vistaAgenda === 'grade') {
+              return (
+                <div key={a.id} onClick={() => setModalAg(a)}
+                  style={{ border: pago ? '1px solid #2f5a3f' : '1px solid #262626', background: pago ? 'rgba(92,182,122,0.08)' : 'rgba(201,162,39,0.04)', borderRadius: '8px', padding: '8px', cursor: 'pointer' }}>
+                  <p style={{ margin: 0, fontWeight: 600, fontSize: '12px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
+                  <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}</p>
+                  <p style={{ margin: '1px 0 0', fontSize: '10px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}</p>
+                  {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago</p>}
+                </div>
+              );
+            }
             return (
               <div key={a.id} onClick={() => setModalAg(a)}
                 style={{ border: pago ? '1px solid #2f5a3f' : '1px solid #262626', background: pago ? 'rgba(92,182,122,0.06)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '6px', cursor: 'pointer' }}>
@@ -868,47 +985,65 @@ function App() {
             );
           };
 
-          // card de GRADE (mini, abre modal ao clicar)
-          const cardGrade = (a) => {
-            const pago = agsPagos.includes(a.id);
-            return (
-              <div key={a.id} onClick={() => setModalAg(a)}
-                style={{ border: pago ? '1px solid #2f5a3f' : '1px solid #262626', background: pago ? 'rgba(92,182,122,0.08)' : 'rgba(201,162,39,0.04)', borderRadius: '8px', padding: '8px', cursor: 'pointer' }}>
-                <p style={{ margin: 0, fontWeight: 600, fontSize: '12px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
-                <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}</p>
-                <p style={{ margin: '1px 0 0', fontSize: '10px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}</p>
-                {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago</p>}
-              </div>
-            );
+          const cardVazio = (h, barbId) => vistaAgenda === 'grade' ? (
+            <div key={'v' + h} onClick={() => encaixarHorario(h, barbId)}
+              style={{ border: '1px dashed #2a2a2a', borderRadius: '8px', padding: '8px', cursor: 'pointer', textAlign: 'center', color: '#5a5a5a' }}>
+              <p style={{ margin: 0, fontSize: '12px', fontWeight: 600 }}>{h}</p>
+              <p style={{ margin: '2px 0 0', fontSize: '10px' }}>+ encaixar</p>
+            </div>
+          ) : (
+            <div key={'v' + h} onClick={() => encaixarHorario(h, barbId)}
+              style={{ border: '1px dashed #2a2a2a', borderRadius: '8px', padding: '8px 12px', marginBottom: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', color: '#5a5a5a' }}>
+              <span style={{ fontWeight: 600, fontSize: '13px' }}>{h}</span>
+              <span style={{ fontSize: '12px' }}>+ encaixar</span>
+            </div>
+          );
+
+          // monta a lista de slots do dia pra um barbeiro: agendamento no início, vazio se livre, pula se dentro de um longo
+          const montarLinhas = (itens, barbId) => {
+            const grade = gradeDoDia(dataDono);
+            const listaDia = (grade.periodos || []).flat();
+            if (listaDia.length === 0) return itens.map(cardAg); // fallback (dia sem grade): só os agendados
+            const inicioMap = {};
+            const ocupadoSet = new Set();
+            itens.forEach((a) => {
+              const ini = a.horario.slice(0, 5);
+              inicioMap[ini] = a;
+              const slots = Math.max(1, Math.ceil((a.duracao_min || 15) / 15));
+              const idx = listaDia.indexOf(ini);
+              if (idx !== -1) for (let k = 1; k < slots; k++) { if (listaDia[idx + k]) ocupadoSet.add(listaDia[idx + k]); }
+            });
+            const linhas = [];
+            listaDia.forEach((h) => {
+              if (inicioMap[h]) linhas.push(cardAg(inicioMap[h]));
+              else if (!ocupadoSet.has(h)) linhas.push(cardVazio(h, barbId));
+            });
+            // agendamentos cujo horário não está na grade (ex: encaixe manual fora da grade) entram no fim
+            itens.forEach((a) => { if (listaDia.indexOf(a.horario.slice(0, 5)) === -1) linhas.push(cardAg(a)); });
+            return linhas;
           };
 
-          const renderCards = (lista) => vistaAgenda === 'grade'
-            ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>{lista.map(cardGrade)}</div>
-            : <div>{lista.map(cardLista)}</div>;
+          const wrap = (linhas) => vistaAgenda === 'grade'
+            ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>{linhas}</div>
+            : <div>{linhas}</div>;
 
-          // em "Todos" (admin sem filtro): separa por barbeiro em colunas
           const emTodos = ehAdmin && filtroBarbeiro === 'todos';
           if (emTodos) {
             const colunas = [...barbeiros].sort((a, b) => (b.nivel === 'admin' ? 1 : 0) - (a.nivel === 'admin' ? 1 : 0)).map((b) => ({ barbeiro: b, itens: agendaDoDia.filter((a) => a.barbeiro_id === b.id) }));
-            const semBarbeiro = agendaDoDia.filter((a) => !a.barbeiro_id);
             return (
               <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
                 {colunas.map(({ barbeiro, itens }) => (
                   <div key={barbeiro.id} style={{ flex: 1, minWidth: 0 }}>
                     <p style={{ fontSize: '12px', fontWeight: 600, color: OURO, textAlign: 'center', margin: '0 0 8px' }}>{barbeiro.nome?.split(' ')[0]}</p>
-                    {itens.length === 0 ? <p style={{ fontSize: '11px', color: '#6b6b6b', textAlign: 'center' }}>—</p> : renderCards(itens)}
+                    {wrap(montarLinhas(itens, barbeiro.id))}
                   </div>
                 ))}
-                {semBarbeiro.length > 0 && (
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontSize: '12px', fontWeight: 600, color: '#8a8a8a', textAlign: 'center', margin: '0 0 8px' }}>Sem pref.</p>
-                    {renderCards(semBarbeiro)}
-                  </div>
-                )}
               </div>
             );
           }
-          return renderCards(agendaDoDia);
+          // filtrado por um barbeiro (ou barbeiro comum logado): uma coluna com grade completa
+          const barbAlvo = filtroBarbeiro !== 'todos' ? filtroBarbeiro : (barbeiroLogado && !ehAdmin ? barbeiroLogado.id : null);
+          return wrap(montarLinhas(agendaDoDia, barbAlvo));
         })()}
 
         {modalAg && (() => {
