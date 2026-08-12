@@ -190,6 +190,9 @@ function App() {
   const [mostrarFormBloqueio, setMostrarFormBloqueio] = useState(false);
   const [bloqueioBarbeiro, setBloqueioBarbeiro] = useState('todos');
   const [bloqueioMotivo, setBloqueioMotivo] = useState('');
+  const [bloqueioInicio, setBloqueioInicio] = useState('');
+  const [bloqueioFim, setBloqueioFim] = useState('');
+  const [bloqueioData, setBloqueioData] = useState('');
 
   const [produtos, setProdutos] = useState([]);
   const [mostrarProdutos, setMostrarProdutos] = useState(false);
@@ -438,17 +441,31 @@ function App() {
     setHorariosOcupados([]);
     setDiaFechadoCliente(false);
     const dataISO = dataParaISO(data);
-    const { data: bloqueios } = await supabase.from('dias_bloqueados').select('barbeiro_id').eq('data', dataISO);
-    if (bloqueios && bloqueios.length > 0) {
-      const barbeiroId = barbeiroEscolhido && !barbeiroEscolhido.semPref ? barbeiroEscolhido.id : null;
-      const fechadoGeral = bloqueios.some((b) => b.barbeiro_id === null);
-      const fechadoDele = barbeiroId && bloqueios.some((b) => b.barbeiro_id === barbeiroId);
+    const { data: bloqueios } = await supabase.from('dias_bloqueados').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
+    const barbeiroId = barbeiroEscolhido && !barbeiroEscolhido.semPref ? barbeiroEscolhido.id : null;
+    const bloqueiosDia = (bloqueios || []).filter((b) => !b.hora_inicio);
+    const bloqueiosFaixa = (bloqueios || []).filter((b) => b.hora_inicio);
+    if (bloqueiosDia.length > 0) {
+      const fechadoGeral = bloqueiosDia.some((b) => b.barbeiro_id === null);
+      const fechadoDele = barbeiroId && bloqueiosDia.some((b) => b.barbeiro_id === barbeiroId);
       if (fechadoGeral || fechadoDele) { setDiaFechadoCliente(true); return; }
     }
+    const faixasBloqueadas = bloqueiosFaixa.filter((b) => b.barbeiro_id === null || b.barbeiro_id === barbeiroId);
     let query = supabase.from('agendamentos').select('horario, barbeiro_id').eq('data', dataISO).neq('status', 'cancelado');
     if (barbeiroEscolhido && !barbeiroEscolhido.semPref) query = query.eq('barbeiro_id', barbeiroEscolhido.id);
     const { data: ocupados } = await query;
-    if (ocupados) setHorariosOcupados(ocupados.map((o) => o.horario.slice(0, 5)));
+    const ocupadosAg = (ocupados || []).map((o) => o.horario.slice(0, 5));
+    let ocupadosFaixa = [];
+    if (faixasBloqueadas.length > 0) {
+      const grade = gradeDoDia(data);
+      const todosHorarios = (grade.periodos || []).flat();
+      faixasBloqueadas.forEach((b) => {
+        const ini = b.hora_inicio.slice(0, 5);
+        const fim = b.hora_fim ? b.hora_fim.slice(0, 5) : ini;
+        ocupadosFaixa = ocupadosFaixa.concat(todosHorarios.filter((h) => h >= ini && h < fim));
+      });
+    }
+    setHorariosOcupados([...ocupadosAg, ...ocupadosFaixa]);
   }
 
   async function confirmarAgendamento() {
@@ -767,11 +784,19 @@ function App() {
 
   async function salvarBloqueio() {
     const barbeiroId = bloqueioBarbeiro === 'todos' ? null : bloqueioBarbeiro;
+    if (!bloqueioData) { alert('Escolha o dia.'); return; }
+    if (bloqueioInicio && bloqueioFim && bloqueioFim <= bloqueioInicio) {
+      alert('A hora de fim precisa ser maior que a de início.'); return;
+    }
     await supabase.from('dias_bloqueados').insert({
-      barbeiro_id: barbeiroId, data: dataParaISO(dataDono), motivo: bloqueioMotivo.trim() || null,
+      barbeiro_id: barbeiroId, data: bloqueioData, motivo: bloqueioMotivo.trim() || null,
+      hora_inicio: bloqueioInicio || null, hora_fim: bloqueioFim || null,
     });
-    setBloqueioMotivo(''); setBloqueioBarbeiro('todos'); setMostrarFormBloqueio(false);
-    carregarAgenda(dataDono);
+    setBloqueioMotivo(''); setBloqueioBarbeiro('todos'); setBloqueioInicio(''); setBloqueioFim(''); setMostrarFormBloqueio(false);
+    const [ano, mes, dia] = bloqueioData.split('-').map(Number);
+    const dataBloqueada = new Date(ano, mes - 1, dia);
+    setDataDono(dataBloqueada);
+    carregarAgenda(dataBloqueada);
   }
 
   async function removerBloqueio(id) {
@@ -1193,17 +1218,25 @@ function App() {
     return (
       <>
         {ehAdmin && (
-          <button style={estilos.botaoSec} onClick={() => { setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+          <button style={estilos.botaoSec} onClick={() => { if (!mostrarFormBloqueio) setBloqueioData(dataParaISO(dataDono)); setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
             {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
           </button>
         )}
         {ehAdmin && mostrarFormBloqueio && (
           <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+            <div style={estilos.label}>Dia</div>
+            <input type="date" style={{ ...estilos.input, marginBottom: '8px' }} value={bloqueioData} onChange={(e) => setBloqueioData(e.target.value)} />
             <div style={estilos.label}>Fechar para</div>
             <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
               <option value="todos">Barbearia toda</option>
               {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
             </select>
+            <div style={estilos.label}>Horário (deixe vazio pra fechar o dia todo)</div>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioInicio} onChange={(e) => setBloqueioInicio(e.target.value)} />
+                          <span style={{ color: '#8a8a8a', alignSelf: 'center' }}>até</span>
+                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioFim} onChange={(e) => setBloqueioFim(e.target.value)} />
+                        </div>
             <div style={estilos.label}>Motivo (opcional)</div>
             <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
             <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
