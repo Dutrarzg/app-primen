@@ -180,6 +180,7 @@ function App() {
   const [dataDono, setDataDono] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()));
   const [agendaDoDia, setAgendaDoDia] = useState([]);
   const [bloqueiosDoDia, setBloqueiosDoDia] = useState([]);
+  const [horariosDiaAgenda, setHorariosDiaAgenda] = useState([]);
   const [carregandoAgenda, setCarregandoAgenda] = useState(false);
 
 
@@ -646,10 +647,12 @@ function App() {
       return { ...a, servicosNomes: nomes, servicosTotal: total };
     });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
+    const { data: hdia } = await supabase.from('horarios_dia').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
     const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id').eq('data', dataISO).eq('categoria', 'servico');
     setAgsPagos((movs || []).map((m) => m.agendamento_id).filter(Boolean));
     setAgendaDoDia(agsComTotais);
     setBloqueiosDoDia(bloqs || []);
+    setHorariosDiaAgenda(hdia || []);
     setCarregandoAgenda(false);
     setPagamentoAg(null);
   }
@@ -1250,6 +1253,14 @@ function App() {
               const af = barbObj.almoco_fim ? barbObj.almoco_fim.slice(0, 5) : ai;
               listaDia.filter((h) => h >= ai && h < af).forEach((h) => almocoSet.add(h));
             }
+            // horário do dia (exceção pontual): o que está fora do intervalo vira "fora do expediente"
+            const foraSet = new Set();
+            const hdBarb = (horariosDiaAgenda || []).find((x) => x.barbeiro_id === barbId);
+            if (hdBarb) {
+              const hi = hdBarb.hora_inicio.slice(0, 5);
+              const hf = hdBarb.hora_fim.slice(0, 5);
+              listaDia.filter((h) => h < hi || h >= hf).forEach((h) => foraSet.add(h));
+            }
             const inicioMap = {};
             const ocupadoSet = new Set();
             itens.forEach((a) => {
@@ -1261,15 +1272,25 @@ function App() {
             });
             const linhas = [];
             let almocoAberto = false;
+            let foraAberto = false;
             listaDia.forEach((h) => {
-              if (inicioMap[h]) { linhas.push(cardAg(inicioMap[h])); almocoAberto = false; }
+              if (inicioMap[h]) { linhas.push(cardAg(inicioMap[h])); almocoAberto = false; foraAberto = false; }
+              else if (ocupadoSet.has(h)) { /* dentro de um agendamento longo: pula */ }
+              else if (foraSet.has(h)) {
+                if (!foraAberto) { // mostra o bloco "fora do expediente" uma vez, no começo do intervalo
+                  linhas.push(<div key={'fora' + h} style={{ border: '1px dashed #2a2a2a', borderRadius: '8px', padding: vistaAgenda === 'grade' ? '8px' : '8px 12px', marginBottom: vistaAgenda === 'grade' ? 0 : '6px', color: '#5a5a5a', textAlign: vistaAgenda === 'grade' ? 'center' : 'left', fontSize: '12px', background: 'rgba(255,255,255,0.015)' }}>🔒 fora do expediente</div>);
+                  foraAberto = true;
+                }
+                almocoAberto = false;
+              }
               else if (almocoSet.has(h)) {
                 if (!almocoAberto) { // mostra o bloco de almoço uma vez, no começo do intervalo
                   linhas.push(<div key={'alm' + h} style={{ border: '1px solid #2a2a2a', borderRadius: '8px', padding: vistaAgenda === 'grade' ? '8px' : '8px 12px', marginBottom: vistaAgenda === 'grade' ? 0 : '6px', color: '#6b6b6b', textAlign: vistaAgenda === 'grade' ? 'center' : 'left', fontSize: '12px', background: 'rgba(255,255,255,0.02)' }}>🍽️ {h} · almoço</div>);
                   almocoAberto = true;
                 }
+                foraAberto = false;
               }
-              else if (!ocupadoSet.has(h)) { linhas.push(cardVazio(h, barbId)); almocoAberto = false; }
+              else { linhas.push(cardVazio(h, barbId)); almocoAberto = false; foraAberto = false; }
             });
             itens.forEach((a) => { if (listaDia.indexOf(a.horario.slice(0, 5)) === -1) linhas.push(cardAg(a)); });
             return linhas;
