@@ -138,7 +138,7 @@ function App() {
   const [barbeiroFilho, setBarbeiroFilho] = useState(null);
 
   const hoje = new Date();
-  const [mesAtual] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+  const [mesAtual, setMesAtual] = useState(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
   const [dataEscolhida, setDataEscolhida] = useState(null);
   const [periodoEscolhido, setPeriodoEscolhido] = useState(0);
   const [horarioEscolhido, setHorarioEscolhido] = useState(null);
@@ -280,6 +280,16 @@ function App() {
     const limite = new Date(zero);
     limite.setDate(limite.getDate() + 30);
     return data > limite;
+  }
+
+  function mudarMes(delta) {
+    const nova = new Date(mesAtual.getFullYear(), mesAtual.getMonth() + delta, 1);
+    const mesMin = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const limite = new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate());
+    limite.setDate(limite.getDate() + 30);
+    const mesMax = new Date(limite.getFullYear(), limite.getMonth(), 1);
+    if (nova < mesMin || nova > mesMax) return; // não sai da janela permitida
+    setMesAtual(nova);
   }
 
   async function tentarEntrar() {
@@ -1765,7 +1775,11 @@ function App() {
                         )}
                         <p style={estilos.titulo}>ESCOLHA A DATA</p>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                          <span onClick={() => mudarMes(-1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 8px', userSelect: 'none' }}>‹</span>
                           <span style={{ fontSize: '13px', textTransform: 'capitalize' }}>{mesAtual.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</span>
+                          <span onClick={() => mudarMes(1)} style={{ cursor: 'pointer', color: OURO, fontSize: '18px', padding: '0 8px', userSelect: 'none' }}>›</span>
+                        </div>
+                        <div style={{ textAlign: 'right', marginBottom: '6px' }}>
                           <span style={{ fontSize: '10px', color: '#6b6b6b' }}>{servicoEhClub ? 'seg a qui' : 'dom fechado'}</span>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '6px' }}>
