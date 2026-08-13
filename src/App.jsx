@@ -3,21 +3,40 @@ import { supabase } from './supabase';
 import logoPrimen from './assets/logo-primen.png';
 import videoAbertura from './assets/abertura.mp4';
 
-const gradeSemana = {
-  periodos: [
-    ['09:00','09:15','09:30','09:45','10:00','10:15','10:30','10:45','11:00','11:15','11:30','11:45'],
-    ['12:00','12:15','12:30','14:20','14:35','14:50','15:05','15:20','15:35','15:50','16:05','16:20','16:35','16:50'],
-    ['17:05','17:20','17:35','17:50','18:05','18:20','18:35','18:50'],
-  ],
-  nomes: ['Manhã', 'Tarde', 'Noite'],
+// Expediente por barbeiro e dia da semana (0=dom, 1=seg ... 6=sáb).
+// Cada valor é [horaInicio, minInicio, horaFim, minFim]. Ausente = fechado.
+const EXPEDIENTE = {
+  'Rennan Martins': {
+    1: [13, 30, 20, 0],
+    2: [13, 30, 20, 0],
+    3: [9, 0, 20, 0],
+    4: [9, 0, 20, 0],
+    5: [8, 0, 20, 0],
+    6: [7, 0, 18, 0],
+  },
+  'Luiz Guilherme': {
+    1: [15, 0, 18, 0],
+    2: [9, 0, 20, 0],
+    3: [9, 0, 20, 0],
+    4: [9, 0, 20, 0],
+    5: [8, 0, 20, 0],
+    6: [7, 0, 18, 0],
+  },
 };
-const gradeSabado = {
-  periodos: [
-    ['07:00','07:15','07:30','07:45','08:00','08:15','08:30','08:45','09:00','09:15','09:30','09:45','10:00','10:15','10:30','10:45','11:00','11:15','11:30','11:45'],
-    ['12:00','12:15','12:30','14:20','14:35','14:50','15:05','15:20','15:35','15:50','16:05','16:20'],
-  ],
-  nomes: ['Manhã', 'Tarde'],
-};
+
+// Gera {periodos, nomes} corridos de 15 em 15, agrupando em Manhã/Tarde/Noite.
+function gerarGradeExpediente(iH, iM, fH, fM) {
+  const todos = gerarHorarios(iH, iM, fH, fM).filter((h) => h !== `${String(fH).padStart(2, '0')}:${String(fM).padStart(2, '0')}`);
+  const manha = todos.filter((h) => h < '12:00');
+  const tarde = todos.filter((h) => h >= '12:00' && h < '18:00');
+  const noite = todos.filter((h) => h >= '18:00');
+  const periodos = [];
+  const nomes = [];
+  if (manha.length) { periodos.push(manha); nomes.push('Manhã'); }
+  if (tarde.length) { periodos.push(tarde); nomes.push('Tarde'); }
+  if (noite.length) { periodos.push(noite); nomes.push('Noite'); }
+  return { periodos, nomes };
+}
 
 function gerarHorarios(inicioH, inicioM, fimH, fimM) {
   const lista = [];
@@ -37,11 +56,6 @@ function horarioFim(horarioInicio, duracaoMin) {
   const fm = total % 60;
   return `${String(fh).padStart(2, '0')}:${String(fm).padStart(2, '0')}`;
 }
-
-const gradeSegundaPorBarbeiro = {
-  'Luiz Guilherme': { periodos: [gerarHorarios(15, 0, 18, 0)], nomes: ['Tarde'] },
-  'Rennan Martins': { periodos: [gerarHorarios(12, 0, 20, 0)], nomes: ['Dia todo'] },
-};
 
 const OURO = '#C9A227';
 const WHATSAPP_BARBEARIA = '5532984079998';
@@ -352,15 +366,45 @@ function App() {
     return () => { supabase.removeChannel(canal); };
   }, [barbeiroLogado, ehAdmin, dataDono]);
 
-  function gradeDoDia(data) {
+  function gradeDoDia(data, nomeBarbeiro) {
     const dow = data.getDay();
-    if (dow === 6) return gradeSabado;
-    if (dow === 1) {
-      if (!barbeiroEscolhido || barbeiroEscolhido.semPref) return { precisaBarbeiro: true };
-      const g = gradeSegundaPorBarbeiro[barbeiroEscolhido.nome];
-      return g || { naoAtende: true };
+    // resolve o barbeiro: parâmetro explícito ou o escolhido no fluxo do cliente
+    let nome = nomeBarbeiro;
+    if (!nome) {
+      if (!barbeiroEscolhido) return { precisaBarbeiro: true };
+      // "sem preferência": une os horários de todos os barbeiros que atendem nesse dia
+      if (barbeiroEscolhido.semPref) return gradeUniao(dow);
+      nome = barbeiroEscolhido.nome;
     }
-    return gradeSemana;
+    const exp = EXPEDIENTE[nome];
+    if (!exp || !exp[dow]) return { naoAtende: true };
+    const [iH, iM, fH, fM] = exp[dow];
+    return gerarGradeExpediente(iH, iM, fH, fM);
+  }
+
+  // União dos slots de todos os barbeiros que atendem nesse dia da semana.
+  function gradeUniao(dow) {
+    const set = new Set();
+    Object.values(EXPEDIENTE).forEach((exp) => {
+      if (exp[dow]) {
+        const [iH, iM, fH, fM] = exp[dow];
+        gerarGradeExpediente(iH, iM, fH, fM).periodos.flat().forEach((h) => set.add(h));
+      }
+    });
+    const todos = [...set].sort();
+    if (todos.length === 0) return { naoAtende: true };
+    const manha = todos.filter((h) => h < '12:00');
+    const tarde = todos.filter((h) => h >= '12:00' && h < '18:00');
+    const noite = todos.filter((h) => h >= '18:00');
+    const periodos = [], nomes = [];
+    if (manha.length) { periodos.push(manha); nomes.push('Manhã'); }
+    if (tarde.length) { periodos.push(tarde); nomes.push('Tarde'); }
+    if (noite.length) { periodos.push(noite); nomes.push('Noite'); }
+    return { periodos, nomes };
+  }
+
+  function nomeDoBarbeiro(id) {
+    return barbeiros.find((b) => b.id === id)?.nome || null;
   }
 
   function diasDoMes() {
@@ -871,7 +915,7 @@ function App() {
     const barbId = a.barbeiro_id;
     const [ano, mes, dia] = dataISO.split('-').map(Number);
     const dataObj = new Date(ano, mes - 1, dia);
-    const gradeDia = gradeDoDia(dataObj);
+    const gradeDia = gradeDoDia(dataObj, nomeDoBarbeiro(barbId));
     const listaDia = (gradeDia.periodos || []).flat();
     // agendamentos do mesmo barbeiro no dia (menos o próprio, que vai ser cancelado)
     let query = supabase.from('agendamentos').select('id, horario, barbeiro_id, duracao_min').eq('data', dataISO).neq('status', 'cancelado');
@@ -1100,12 +1144,12 @@ function App() {
             )}
             <div style={estilos.label}>Horário</div>
             {(() => {
-              const grade = gradeDoDia(dataDono);
+              const barbSel = ehAdmin ? manualBarbeiro : (barbeiroLogado?.id || '');
+              const grade = gradeDoDia(dataDono, nomeDoBarbeiro(barbSel));
               const listaDia = (grade.periodos || []).flat();
               if (grade.precisaBarbeiro || grade.naoAtende || listaDia.length === 0) {
                 return <input style={estilos.input} value={manualHorario} onChange={(e) => setManualHorario(e.target.value)} placeholder="HH:MM" />;
               }
-              const barbSel = ehAdmin ? manualBarbeiro : (barbeiroLogado?.id || '');
               // ocupados: agendamentos do dia do barbeiro escolhido (expandidos por duração)
               const ocup = new Set();
               agendaDoDia.forEach((a) => {
@@ -1192,9 +1236,9 @@ function App() {
 
           // monta a lista de slots do dia pra um barbeiro: agendamento no início, vazio se livre, pula se dentro de um longo
           const montarLinhas = (itens, barbId) => {
-            const grade = gradeDoDia(dataDono);
+            const grade = gradeDoDia(dataDono, nomeDoBarbeiro(barbId));
             const listaDia = (grade.periodos || []).flat();
-            if (listaDia.length === 0) return itens.map(cardAg); // fallback (dia sem grade): só os agendados
+            if (listaDia.length === 0) return itens.map(cardAg); // fallback (dia sem grade/fechado): só os agendados
             // horários de almoço do barbeiro dessa coluna
             const barbObj = barbeiros.find((b) => b.id === barbId);
             const almocoSet = new Set();
@@ -1321,7 +1365,7 @@ function App() {
         {remarcarAg && (() => {
           const [ano, mes, dia] = remarcarData.split('-').map(Number);
           const dataObj = new Date(ano, mes - 1, dia);
-          const gradeDia = gradeDoDia(dataObj);
+          const gradeDia = gradeDoDia(dataObj, nomeDoBarbeiro(remarcarAg.barbeiro_id));
           const listaDia = (gradeDia.periodos || []).flat();
           const dur = remarcarAg.duracao_min || 15;
           const slots = Math.max(1, Math.ceil(dur / 15));
@@ -2016,14 +2060,14 @@ function App() {
                           if (grade.precisaBarbeiro) {
                             return (
                               <div style={{ textAlign: 'center', border: '1px dashed #C9A227', borderRadius: '8px', padding: '16px', color: '#d6d6d6', fontSize: '13px' }}>
-                                Na segunda-feira, cada barbeiro tem horário próprio.<br />Volte e escolha um barbeiro específico.
+                                Cada barbeiro tem horário próprio.<br />Volte e escolha um barbeiro específico.
                               </div>
                             );
                           }
                           if (grade.naoAtende) {
                             return (
                               <div style={{ textAlign: 'center', border: '1px dashed #444', borderRadius: '8px', padding: '16px', color: '#8a8a8a', fontSize: '13px' }}>
-                                {barbeiroEscolhido?.nome} não atende na segunda-feira. Escolha outra data.
+                                {barbeiroEscolhido?.nome} não atende nesse dia. Escolha outra data.
                               </div>
                             );
                           }
