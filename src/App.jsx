@@ -1138,57 +1138,7 @@ function App() {
           </div>
         )}
 
-        {barbeiroLogado && (
-          <>
-            <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={abrirEditorAlmoco}>
-              {mostrarAlmoco ? 'Cancelar' : '🍽️ Meu horário de almoço'}
-            </button>
-            {mostrarAlmoco && (
-              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 8px' }}>Esse intervalo fica indisponível pra agendar, todo dia. Pra mudar só num dia específico, use "bloquear horário".</p>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
-                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={almocoIni} onChange={(e) => setAlmocoIni(e.target.value)} />
-                  <span style={{ color: '#8a8a8a' }}>até</span>
-                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={almocoFim} onChange={(e) => setAlmocoFim(e.target.value)} />
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarAlmoco}>Salvar</button>
-                  {(almocoIni || almocoFim) && <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={() => { setAlmocoIni(''); setAlmocoFim(''); }}>Limpar</button>}
-                </div>
-              </div>
-            )}
-
-            <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={abrirEditorHorarioDia}>
-              {mostrarHorarioDia ? 'Cancelar' : '🕐 Meu horário nesse dia'}
-            </button>
-            {mostrarHorarioDia && (
-              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-                <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 8px' }}>Pra um imprevisto: define o horário que você vai trabalhar SÓ nesse dia. Fora dele fica indisponível. O almoço continua valendo.</p>
-                {ehAdmin && (
-                  <>
-                    <div style={estilos.label}>Barbeiro</div>
-                    <select style={estilos.input} value={hdBarbeiro} onChange={(e) => setHdBarbeiro(e.target.value)}>
-                      <option value="">Escolha</option>
-                      {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
-                    </select>
-                  </>
-                )}
-                <div style={estilos.label}>Dia</div>
-                <input type="date" style={estilos.input} value={hdData} onChange={(e) => setHdData(e.target.value)} />
-                <div style={estilos.label}>Vou trabalhar das</div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
-                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={hdIni} onChange={(e) => setHdIni(e.target.value)} />
-                  <span style={{ color: '#8a8a8a' }}>até</span>
-                  <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={hdFim} onChange={(e) => setHdFim(e.target.value)} />
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarHorarioDia}>Salvar</button>
-                  <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={limparHorarioDia}>Remover</button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
+        {GrupoProdutos()}
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '10px' }}>
           <p style={{ ...estilos.titulo, margin: 0 }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA'}</p>
@@ -1534,42 +1484,70 @@ function App() {
     );
   }
 
-  function BlocoAdminExtra() {
+  function GrupoHorarios() {
+    if (!barbeiroLogado) return null;
     return (
       <>
-        {ehAdmin && (
-          <button style={estilos.botaoSec} onClick={() => { if (!mostrarFormBloqueio) setBloqueioData(dataParaISO(dataDono)); setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
-            {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
-          </button>
-        )}
-        {ehAdmin && mostrarFormBloqueio && (
+        <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={abrirEditorAlmoco}>
+          {mostrarAlmoco ? 'Cancelar' : '🍽️ Meu horário de almoço'}
+        </button>
+        {mostrarAlmoco && (
           <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
-            <div style={estilos.label}>Dia</div>
-            <input type="date" style={{ ...estilos.input, marginBottom: '8px' }} value={bloqueioData} onChange={(e) => setBloqueioData(e.target.value)} />
-            <div style={estilos.label}>Fechar para</div>
-            <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
-              <option value="todos">Barbearia toda</option>
-              {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
-            </select>
-            <div style={estilos.label}>Horário (deixe vazio pra fechar o dia todo)</div>
-                        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioInicio} onChange={(e) => setBloqueioInicio(e.target.value)} />
-                          <span style={{ color: '#8a8a8a', alignSelf: 'center' }}>até</span>
-                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioFim} onChange={(e) => setBloqueioFim(e.target.value)} />
-                        </div>
-            <div style={estilos.label}>Motivo (opcional)</div>
-            <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
-            <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
+            <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 8px' }}>Esse intervalo fica indisponível pra agendar, todo dia. Pra mudar só num dia específico, use "bloquear horário".</p>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+              <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={almocoIni} onChange={(e) => setAlmocoIni(e.target.value)} />
+              <span style={{ color: '#8a8a8a' }}>até</span>
+              <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={almocoFim} onChange={(e) => setAlmocoFim(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarAlmoco}>Salvar</button>
+              {(almocoIni || almocoFim) && <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={() => { setAlmocoIni(''); setAlmocoFim(''); }}>Limpar</button>}
+            </div>
           </div>
         )}
 
-        {ehAdmin && (
-          <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
-            {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
-          </button>
+        <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={abrirEditorHorarioDia}>
+          {mostrarHorarioDia ? 'Cancelar' : '🕐 Meu horário nesse dia'}
+        </button>
+        {mostrarHorarioDia && (
+          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+            <p style={{ fontSize: '12px', color: '#8a8a8a', margin: '0 0 8px' }}>Pra um imprevisto: define o horário que você vai trabalhar SÓ nesse dia. Fora dele fica indisponível. O almoço continua valendo.</p>
+            {ehAdmin && (
+              <>
+                <div style={estilos.label}>Barbeiro</div>
+                <select style={estilos.input} value={hdBarbeiro} onChange={(e) => setHdBarbeiro(e.target.value)}>
+                  <option value="">Escolha</option>
+                  {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
+                </select>
+              </>
+            )}
+            <div style={estilos.label}>Dia</div>
+            <input type="date" style={estilos.input} value={hdData} onChange={(e) => setHdData(e.target.value)} />
+            <div style={estilos.label}>Vou trabalhar das</div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '10px' }}>
+              <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={hdIni} onChange={(e) => setHdIni(e.target.value)} />
+              <span style={{ color: '#8a8a8a' }}>até</span>
+              <input type="time" style={{ ...estilos.input, flex: 1, marginBottom: 0 }} value={hdFim} onChange={(e) => setHdFim(e.target.value)} />
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={salvarHorarioDia}>Salvar</button>
+              <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#e07a7a', fontSize: '13px', cursor: 'pointer' }} onClick={limparHorarioDia}>Remover</button>
+            </div>
+          </div>
         )}
+      </>
+    );
+  }
 
-        {ehAdmin && mostrarProdutos && (
+  function GrupoProdutos() {
+    if (!ehAdmin) return null;
+    return (
+      <>
+        <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { if (!mostrarProdutos) carregarProdutos(); setMostrarProdutos(!mostrarProdutos); setMostrarFormProduto(false); setVendaProduto(null); }}>
+          {mostrarProdutos ? 'Esconder produtos' : '📦 Produtos / Estoque'}
+        </button>
+
+        {mostrarProdutos && (
           <div style={{ marginTop: '8px' }}>
             <button style={estilos.botaoSec} onClick={() => { if (mostrarFormProduto) { setMostrarFormProduto(false); } else { abrirFormNovoProduto(); } }}>
               {mostrarFormProduto ? 'Cancelar' : '+ Novo produto'}
@@ -1627,6 +1605,40 @@ function App() {
             )}
           </div>
         )}
+      </>
+    );
+  }
+
+  function BlocoAdminExtra() {
+    return (
+      <>
+        {ehAdmin && (
+          <button style={estilos.botaoSec} onClick={() => { if (!mostrarFormBloqueio) setBloqueioData(dataParaISO(dataDono)); setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+            {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+          </button>
+        )}
+        {ehAdmin && mostrarFormBloqueio && (
+          <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+            <div style={estilos.label}>Dia</div>
+            <input type="date" style={{ ...estilos.input, marginBottom: '8px' }} value={bloqueioData} onChange={(e) => setBloqueioData(e.target.value)} />
+            <div style={estilos.label}>Fechar para</div>
+            <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
+              <option value="todos">Barbearia toda</option>
+              {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
+            </select>
+            <div style={estilos.label}>Horário (deixe vazio pra fechar o dia todo)</div>
+                        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioInicio} onChange={(e) => setBloqueioInicio(e.target.value)} />
+                          <span style={{ color: '#8a8a8a', alignSelf: 'center' }}>até</span>
+                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioFim} onChange={(e) => setBloqueioFim(e.target.value)} />
+                        </div>
+            <div style={estilos.label}>Motivo (opcional)</div>
+            <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
+            <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
+          </div>
+        )}
+
+        {GrupoHorarios()}
       </>
     );
   }
