@@ -588,38 +588,54 @@ function App() {
     if (temAcompanhante && servicosFilho.length === 0) { setErroSalvar('Escolha ao menos um serviço para o acompanhante.'); return; }
     setSalvando(true);
 
-    // Garante que a sessão está válida antes de gravar (RLS exige auth.uid()).
-    // Sessão expirada é a causa comum de "não consigo marcar" em cadastros antigos / Android.
-    let { data: { session: sessaoAtual } } = await supabase.auth.getSession();
-    if (!sessaoAtual) {
-      const { data: refr } = await supabase.auth.refreshSession();
-      sessaoAtual = refr?.session || null;
-    }
-    if (!sessaoAtual) {
-      setSalvando(false);
-      setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar o agendamento.');
-      return;
-    }
+    // Nunca deixa o botão preso em "Salvando..." — corta em 12s se algo não responder.
+    const comTimeout = (promise, ms = 12000) => Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve({ __timeout: true }), ms)),
+    ]);
 
-    const dataISO = dataParaISO(dataEscolhida);
-    const duracaoPai = Math.max(1, Math.ceil(duracaoTotal / 15)) * 15;
-    const grupoId = temAcompanhante ? (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())) : null;
+    try {
+      // Garante que a sessão está válida antes de gravar (RLS exige auth.uid()).
+      let sessRes = await comTimeout(supabase.auth.getSession(), 8000);
+      let sessaoAtual = sessRes?.data?.session || null;
+      if (!sessaoAtual && !sessRes?.__timeout) {
+        const refr = await comTimeout(supabase.auth.refreshSession(), 8000);
+        sessaoAtual = refr?.data?.session || null;
+      }
+      if (!sessaoAtual) {
+        setSalvando(false);
+        setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar o agendamento.');
+        return;
+      }
 
-    // agendamento do PAI
-    const { data: agPai, error: erroPai } = await supabase.from('agendamentos').insert({
-      cliente_id: clienteLogado.id, barbeiro_id: barbeiroEscolhido?.id || null, servico_id: servicoEscolhido.id,
-      data: dataISO, horario: horarioEscolhido, status: 'confirmado', origem: 'cliente',
-      duracao_min: duracaoPai, grupo_id: grupoId,
-    }).select().single();
-    if (erroPai) {
-      setSalvando(false);
-      const cod = erroPai.code || '';
-      if (cod === '23505') { setErroSalvar('Esse horário já foi reservado. Escolha outro.'); }
-      else if (cod === '42501' || (erroPai.message || '').toLowerCase().includes('row-level security')) { setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar.'); }
-      else { setErroSalvar('Não consegui confirmar agora. Tente de novo em instantes.'); }
-      return;
-    }
-    await supabase.from('agendamento_servicos').insert(servicosEscolhidos.map((s) => ({ agendamento_id: agPai.id, servico_id: s.id })));
+      const dataISO = dataParaISO(dataEscolhida);
+      const duracaoPai = Math.max(1, Math.ceil(duracaoTotal / 15)) * 15;
+      const grupoId = temAcompanhante ? (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())) : null;
+
+      // agendamento do PAI
+      const resPai = await comTimeout(supabase.from('agendamentos').insert({
+        cliente_id: clienteLogado.id, barbeiro_id: barbeiroEscolhido?.id || null, servico_id: servicoEscolhido.id,
+        data: dataISO, horario: horarioEscolhido, status: 'confirmado', origem: 'cliente',
+        duracao_min: duracaoPai, grupo_id: grupoId,
+      }).select().maybeSingle());
+
+      if (resPai?.__timeout) {
+        setSalvando(false);
+        setErroSalvar('A conexão demorou demais. Confira sua internet e tente de novo.');
+        return;
+      }
+      const agPai = resPai?.data;
+      const erroPai = resPai?.error;
+      if (erroPai || !agPai) {
+        setSalvando(false);
+        const cod = erroPai?.code || '';
+        if (cod === '23505') { setErroSalvar('Esse horário já foi reservado. Escolha outro.'); }
+        else if (cod === '42501' || (erroPai?.message || '').toLowerCase().includes('row-level security')) { setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar.'); }
+        else if (!agPai && !erroPai) { setErroSalvar('Não consegui confirmar. Saia, entre de novo e tente mais uma vez.'); }
+        else { setErroSalvar('Não consegui confirmar agora. Tente de novo em instantes.'); }
+        return;
+      }
+      await supabase.from('agendamento_servicos').insert(servicosEscolhidos.map((s) => ({ agendamento_id: agPai.id, servico_id: s.id })));
 
     // agendamento do FILHO (se houver)
     if (temAcompanhante) {
@@ -643,6 +659,10 @@ function App() {
       setAgRemarcando(null);
     }
     setEtapa('sucesso');
+    } catch (e) {
+      setSalvando(false);
+      setErroSalvar('Algo deu errado ao confirmar. Tente de novo; se persistir, saia e entre de novo.');
+    }
   }
 
   function recomecarAgendamento() {
