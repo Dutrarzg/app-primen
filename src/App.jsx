@@ -273,7 +273,17 @@ function App() {
       if (session?.user) {
         const { data: barb } = await supabase.from('barbeiros').select('*').eq('auth_id', session.user.id).maybeSingle();
         if (barb) { setBarbeiroLogado(barb); setModo('dono'); carregarAgenda(new Date(), barb); return; }
-        const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', session.user.id).maybeSingle();
+        let { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', session.user.id).maybeSingle();
+        if (!cli) {
+          const telSalvo = localStorage.getItem('primen_tel');
+          if (telSalvo) {
+            const { data: cliTel } = await supabase.from('clientes').select('*').eq('telefone', telSalvo).maybeSingle();
+            if (cliTel) {
+              await supabase.from('clientes').update({ auth_id: session.user.id }).eq('id', cliTel.id);
+              cli = { ...cliTel, auth_id: session.user.id };
+            }
+          }
+        }
         if (cli) { setClienteLogado(cli); setTela('menu'); }
       }
     }
@@ -455,8 +465,17 @@ function App() {
       }
       return;
     }
-    const { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', data.user.id).maybeSingle();
+    let { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', data.user.id).maybeSingle();
+    // Cadastros antigos podem ter auth_id desalinhado: acha por telefone e realinha.
+    if (!cli) {
+      const { data: cliTel } = await supabase.from('clientes').select('*').eq('telefone', loginTel.trim()).maybeSingle();
+      if (cliTel) {
+        await supabase.from('clientes').update({ auth_id: data.user.id }).eq('id', cliTel.id);
+        cli = { ...cliTel, auth_id: data.user.id };
+      }
+    }
     setProcessandoLogin(false);
+    if (!cli) { setErroLogin('Não encontrei seu cadastro. Tente novamente ou refaça o cadastro.'); return; }
     localStorage.setItem('primen_tel', loginTel.trim());
     setClienteLogado(cli);
     setTela('menu');
@@ -586,6 +605,7 @@ function App() {
     setErroSalvar('');
     if (servicosEscolhidos.length === 0) { setErroSalvar('Escolha ao menos um serviço.'); return; }
     if (temAcompanhante && servicosFilho.length === 0) { setErroSalvar('Escolha ao menos um serviço para o acompanhante.'); return; }
+    if (!clienteLogado?.id) { setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar.'); return; }
     setSalvando(true);
 
     // Nunca deixa o botão preso em "Salvando..." — corta em 12s se algo não responder.
