@@ -235,6 +235,9 @@ function App() {
   const [vistaAgenda, setVistaAgenda] = useState('lista');
   const [mostrarCalendarioDono, setMostrarCalendarioDono] = useState(false);
   const [modalAg, setModalAg] = useState(null);
+  const [editandoNome, setEditandoNome] = useState(false);
+  const [nomeEditado, setNomeEditado] = useState('');
+  const [salvandoNome, setSalvandoNome] = useState(false);
   const [remarcandoDonoId, setRemarcandoDonoId] = useState(null);
   const [remarcarAg, setRemarcarAg] = useState(null);
   const [remarcarData, setRemarcarData] = useState('');
@@ -455,12 +458,31 @@ function App() {
     const email = telParaEmail(loginTel);
     const { data, error } = await supabase.auth.signInWithPassword({ email, password: loginSenha.trim() });
     if (error) {
-      setProcessandoLogin(false);
       if (error.message.toLowerCase().includes('invalid')) {
         const { data: existe } = await supabase.from('clientes').select('id').eq('telefone', loginTel.trim()).maybeSingle();
-        if (existe) { setErroLogin('Senha incorreta.'); }
-        else { setTela('cadastro'); }
+        if (existe) {
+          // Cliente existe em clientes mas o login falhou. Pode ser conta de Auth perdida
+          // (cadastro antigo). Tenta recriar a conta de Auth com a senha digitada.
+          const { data: signData, error: signErr } = await supabase.auth.signUp({ email, password: loginSenha.trim() });
+          if (!signErr && signData?.user) {
+            // conta de Auth não existia mesmo: recriada. Realinha o cliente e entra.
+            await supabase.from('clientes').update({ auth_id: signData.user.id }).eq('id', existe.id);
+            const { data: cliRec } = await supabase.from('clientes').select('*').eq('id', existe.id).maybeSingle();
+            setProcessandoLogin(false);
+            localStorage.setItem('primen_tel', loginTel.trim());
+            setClienteLogado(cliRec);
+            setTela('menu');
+            return;
+          }
+          // signUp falhou porque a conta de Auth existe → senha estava errada mesmo.
+          setProcessandoLogin(false);
+          setErroLogin('Senha incorreta.');
+        } else {
+          setProcessandoLogin(false);
+          setTela('cadastro');
+        }
       } else {
+        setProcessandoLogin(false);
         setErroLogin('Erro ao entrar. Tente novamente.');
       }
       return;
@@ -740,7 +762,7 @@ function App() {
     const dataISO = dataParaISO(data);
     let query = supabase
       .from('agendamentos')
-      .select('id, horario, status, origem, servico_id, barbeiro_id, duracao_min, nome_acompanhante, grupo_id, clientes(nome, telefone), servicos(nome, preco), barbeiros(nome), agendamento_servicos(servicos(nome, preco))')
+      .select('id, horario, status, origem, servico_id, barbeiro_id, duracao_min, nome_acompanhante, grupo_id, clientes(id, nome, telefone), servicos(nome, preco), barbeiros(nome), agendamento_servicos(servicos(nome, preco))')
       .eq('data', dataISO).neq('status', 'cancelado');
     if (barb && barb.nivel !== 'admin') query = query.eq('barbeiro_id', barb.id);
     else if (filtro !== 'todos') query = query.eq('barbeiro_id', filtro);
@@ -951,6 +973,21 @@ function App() {
     const quem = a.nome_acompanhante || a.clientes?.nome || 'cliente';
     if (!confirm('Cancelar o horário de ' + quem + '?')) return;
     await supabase.from('agendamentos').update({ status: 'cancelado' }).eq('id', a.id);
+    carregarAgenda(dataDono);
+  }
+
+  async function salvarNomeCliente(a) {
+    const novo = nomeEditado.trim();
+    if (!novo) return;
+    const clienteId = a.clientes?.id || a.cliente_id;
+    if (!clienteId) { alert('Não consegui identificar o cliente.'); return; }
+    setSalvandoNome(true);
+    const { error } = await supabase.from('clientes').update({ nome: novo }).eq('id', clienteId);
+    setSalvandoNome(false);
+    if (error) { alert('Não consegui salvar o nome. Tente de novo.'); return; }
+    // atualiza o modal aberto e recarrega a agenda pra refletir em todo lugar
+    setModalAg({ ...a, clientes: { ...(a.clientes || {}), id: clienteId, nome: novo } });
+    setEditandoNome(false);
     carregarAgenda(dataDono);
   }
 
@@ -1379,15 +1416,25 @@ function App() {
           const pago = agsPagos.includes(a.id);
           const aberto = pagamentoAg?.id === a.id;
           return (
-            <div onClick={() => { setModalAg(null); setPagamentoAg(null); }}
+            <div onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); }}
               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px' }}>
               <div onClick={(e) => e.stopPropagation()}
                 style={{ background: '#161616', border: '1px solid #333', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '340px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                   <p style={{ margin: 0, fontWeight: 700, fontSize: '18px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
-                  <span onClick={() => { setModalAg(null); setPagamentoAg(null); }} style={{ fontSize: '18px', color: '#8a8a8a', cursor: 'pointer', lineHeight: 1 }}>×</span>
+                  <span onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); }} style={{ fontSize: '18px', color: '#8a8a8a', cursor: 'pointer', lineHeight: 1 }}>×</span>
                 </div>
-                <p style={{ margin: '0 0 2px', fontSize: '15px', color: '#f2f2f2' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}{a.nome_acompanhante && <span style={{ fontSize: '11px', color: '#8a8a8a' }}> (acomp. de {a.clientes?.nome?.split(' ')[0]})</span>}</p>
+                {editandoNome && !a.nome_acompanhante ? (
+                  <div style={{ margin: '4px 0 8px' }}>
+                    <input style={{ ...estilos.input, marginBottom: '8px' }} value={nomeEditado} onChange={(e) => setNomeEditado(e.target.value)} placeholder="Nome do cliente" autoComplete="off" />
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button disabled={salvandoNome} style={{ flex: 1, padding: '9px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={() => salvarNomeCliente(a)}>{salvandoNome ? 'Salvando...' : 'Salvar nome'}</button>
+                      <button style={{ flex: 1, padding: '9px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setEditandoNome(false)}>Cancelar</button>
+                    </div>
+                  </div>
+                ) : (
+                  <p style={{ margin: '0 0 2px', fontSize: '15px', color: '#f2f2f2' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}{a.nome_acompanhante && <span style={{ fontSize: '11px', color: '#8a8a8a' }}> (acomp. de {a.clientes?.nome?.split(' ')[0]})</span>}</p>
+                )}
                 <p style={{ margin: '0 0 2px', fontSize: '13px', color: '#c9c9c9' }}>{a.servicosNomes || a.servicos?.nome}</p>
                 <p style={{ margin: '0 0 2px', fontSize: '12px', color: '#8a8a8a' }}>{a.barbeiros?.nome || 'Sem preferência'}</p>
                 {a.clientes?.telefone && !a.clientes.telefone.startsWith('manual-') && <p style={{ margin: 0, fontSize: '12px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
@@ -1415,6 +1462,9 @@ function App() {
                     )}
                     {!pago && <button onClick={() => abrirPagamento(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Marcar como pago</button>}
                     <button onClick={() => remarcarPeloDono(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #C9A227', background: 'transparent', color: OURO, fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Remarcar</button>
+                    {!a.nome_acompanhante && (a.clientes?.id || a.cliente_id) && (
+                      <button onClick={() => { setNomeEditado(a.clientes?.nome || ''); setEditandoNome(true); }} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#c9c9c9', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>✏️ Editar nome do cliente</button>
+                    )}
                     <button onClick={() => { cancelarAgendamentoDono(a); setModalAg(null); }} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #a33d3d', background: 'transparent', color: '#e07a7a', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Cancelar horário</button>
                   </div>
                 )}
@@ -1841,7 +1891,7 @@ function App() {
                   <>
                     <p style={estilos.titulo}>ENTRAR</p>
                     <div style={estilos.label}>Celular</div>
-                    <input style={estilos.input} value={loginTel} onChange={(e) => setLoginTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" />
+                    <input style={estilos.input} value={loginTel} onChange={(e) => setLoginTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" autoComplete="tel" name="telefone-login" />
                     <div style={estilos.label}>Senha</div>
                     <input style={estilos.input} type="password" value={loginSenha} onChange={(e) => setLoginSenha(e.target.value)} placeholder="Sua senha" />
                     {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
@@ -1857,9 +1907,9 @@ function App() {
                     <p style={estilos.titulo}>CRIAR CONTA</p>
                     <p style={{ fontSize: '13px', color: '#a3a3a3', marginBottom: '14px' }}>Esse número ainda não tem conta. Vamos criar!</p>
                     <div style={estilos.label}>Nome</div>
-                    <input style={estilos.input} value={cadastroNome} onChange={(e) => setCadastroNome(e.target.value)} placeholder="Seu nome" />
+                    <input style={estilos.input} value={cadastroNome} onChange={(e) => setCadastroNome(e.target.value)} placeholder="Seu nome" autoComplete="name" name="nome-cadastro" />
                     <div style={estilos.label}>Crie uma senha (mín. 6 caracteres)</div>
-                    <input style={estilos.input} type="password" value={cadastroSenha} onChange={(e) => setCadastroSenha(e.target.value)} placeholder="Sua senha" />
+                    <input style={estilos.input} type="password" value={cadastroSenha} onChange={(e) => setCadastroSenha(e.target.value)} placeholder="Sua senha" autoComplete="new-password" />
                     {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
                     <button onClick={cadastrar} disabled={processandoLogin} style={estilos.botao(!processandoLogin)}>{processandoLogin ? 'Criando...' : 'Criar conta e entrar'}</button>
                   </>
