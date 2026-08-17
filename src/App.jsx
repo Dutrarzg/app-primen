@@ -587,6 +587,20 @@ function App() {
     if (servicosEscolhidos.length === 0) { setErroSalvar('Escolha ao menos um serviço.'); return; }
     if (temAcompanhante && servicosFilho.length === 0) { setErroSalvar('Escolha ao menos um serviço para o acompanhante.'); return; }
     setSalvando(true);
+
+    // Garante que a sessão está válida antes de gravar (RLS exige auth.uid()).
+    // Sessão expirada é a causa comum de "não consigo marcar" em cadastros antigos / Android.
+    let { data: { session: sessaoAtual } } = await supabase.auth.getSession();
+    if (!sessaoAtual) {
+      const { data: refr } = await supabase.auth.refreshSession();
+      sessaoAtual = refr?.session || null;
+    }
+    if (!sessaoAtual) {
+      setSalvando(false);
+      setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar o agendamento.');
+      return;
+    }
+
     const dataISO = dataParaISO(dataEscolhida);
     const duracaoPai = Math.max(1, Math.ceil(duracaoTotal / 15)) * 15;
     const grupoId = temAcompanhante ? (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())) : null;
@@ -597,7 +611,14 @@ function App() {
       data: dataISO, horario: horarioEscolhido, status: 'confirmado', origem: 'cliente',
       duracao_min: duracaoPai, grupo_id: grupoId,
     }).select().single();
-    if (erroPai) { setSalvando(false); setErroSalvar('Esse horário já foi reservado. Escolha outro.'); return; }
+    if (erroPai) {
+      setSalvando(false);
+      const cod = erroPai.code || '';
+      if (cod === '23505') { setErroSalvar('Esse horário já foi reservado. Escolha outro.'); }
+      else if (cod === '42501' || (erroPai.message || '').toLowerCase().includes('row-level security')) { setErroSalvar('Sua sessão expirou. Saia e entre de novo para confirmar.'); }
+      else { setErroSalvar('Não consegui confirmar agora. Tente de novo em instantes.'); }
+      return;
+    }
     await supabase.from('agendamento_servicos').insert(servicosEscolhidos.map((s) => ({ agendamento_id: agPai.id, servico_id: s.id })));
 
     // agendamento do FILHO (se houver)
