@@ -232,6 +232,7 @@ function App() {
   const [pagamentoAg, setPagamentoAg] = useState(null);
   const [pagamentoValor, setPagamentoValor] = useState('');
   const [formaPagamento, setFormaPagamento] = useState('dinheiro');
+  const [extrasPagamento, setExtrasPagamento] = useState([]);
   const [vistaAgenda, setVistaAgenda] = useState('lista');
   const [mostrarCalendarioDono, setMostrarCalendarioDono] = useState(false);
   const [modalAg, setModalAg] = useState(null);
@@ -851,17 +852,43 @@ function App() {
   function abrirPagamento(ag) {
     setPagamentoAg(ag);
     setFormaPagamento('dinheiro');
+    setExtrasPagamento([]);
     const valor = ag.servicosTotal != null ? ag.servicosTotal : (ag.servicos?.preco || 0);
     setPagamentoValor(valor ? String(valor).replace('.', ',') : '');
   }
 
+  function baseValorPagamento(ag) {
+    return ag.servicosTotal != null ? ag.servicosTotal : (ag.servicos?.preco || 0);
+  }
+
+  function adicionarExtraPagamento(servicoId) {
+    if (!servicoId) return;
+    const svc = servicos.find((s) => s.id === servicoId);
+    if (!svc) return;
+    const novos = [...extrasPagamento, svc];
+    setExtrasPagamento(novos);
+    const total = baseValorPagamento(pagamentoAg) + novos.reduce((s, x) => s + Number(x.preco), 0);
+    setPagamentoValor(String(total.toFixed(2)).replace('.', ','));
+  }
+
+  function removerExtraPagamento(idx) {
+    const novos = extrasPagamento.filter((_, i) => i !== idx);
+    setExtrasPagamento(novos);
+    const total = baseValorPagamento(pagamentoAg) + novos.reduce((s, x) => s + Number(x.preco), 0);
+    setPagamentoValor(String(total.toFixed(2)).replace('.', ','));
+  }
+
   async function confirmarPagamento() {
     const valorNum = parseFloat(pagamentoValor.replace(',', '.')) || 0;
+    const nomesExtras = extrasPagamento.map((s) => s.nome).join(' + ');
+    const descBase = pagamentoAg.servicosNomes || pagamentoAg.servicos?.nome || 'serviço';
+    const desc = nomesExtras ? `${descBase} + ${nomesExtras}` : descBase;
     await supabase.from('movimentacoes').insert({
-      descricao: `Atendimento: ${pagamentoAg.servicosNomes || pagamentoAg.servicos?.nome || 'serviço'} (${pagamentoAg.clientes?.nome || 'cliente'})`,
+      descricao: `Atendimento: ${desc} (${pagamentoAg.clientes?.nome || 'cliente'})`,
       valor: valorNum, categoria: 'servico', barbeiro_id: pagamentoAg.barbeiro_id || null,
       agendamento_id: pagamentoAg.id, data: dataParaISO(dataDono), forma_pagamento: formaPagamento,
     });
+    setExtrasPagamento([]);
     setPagamentoAg(null);
     carregarAgenda(dataDono);
     carregarFinanceiro();
@@ -1111,6 +1138,7 @@ function App() {
     if (!manualServico || !manualHorario.trim()) {
       setErroManual('Preencha serviço e horário.'); return;
     }
+    if (ehAdmin && !manualBarbeiro) { setErroManual('Escolha o barbeiro.'); return; }
     let clienteId = manualClienteId;
     if (!clienteId) {
       if (!manualNome.trim()) { setErroManual('Escolha ou digite o cliente.'); return; }
@@ -1120,11 +1148,15 @@ function App() {
       clienteId = cliente.id;
     }
     const barbId = ehAdmin ? (manualBarbeiro || null) : barbeiroLogado.id;
-    const { error: erroAg } = await supabase.from('agendamentos').insert({
+    const svc = servicos.find((s) => s.id === manualServico);
+    const duracao = Math.max(1, Math.ceil((svc?.duracao_min || 15) / 15)) * 15;
+    const { data: agManual, error: erroAg } = await supabase.from('agendamentos').insert({
       cliente_id: clienteId, barbeiro_id: barbId, servico_id: manualServico,
       data: dataParaISO(dataDono), horario: manualHorario.trim(), status: 'confirmado', origem: 'dono',
-    });
-    if (erroAg) { setErroManual('Esse horário já está ocupado.'); return; }
+      duracao_min: duracao,
+    }).select().maybeSingle();
+    if (erroAg || !agManual) { setErroManual('Esse horário já está ocupado.'); return; }
+    await supabase.from('agendamento_servicos').insert({ agendamento_id: agManual.id, servico_id: manualServico });
     setManualNome(''); setManualTel(''); setManualServico(''); setManualBarbeiro(''); setManualHorario('');
     setManualClienteId(null); setBuscaCliente('');
     setMostrarFormManual(false);
@@ -1233,9 +1265,9 @@ function App() {
             </select>
             {ehAdmin && (
               <>
-                <div style={estilos.label}>Barbeiro (opcional)</div>
+                <div style={estilos.label}>Barbeiro</div>
                 <select style={estilos.input} value={manualBarbeiro} onChange={(e) => setManualBarbeiro(e.target.value)}>
-                  <option value="">Sem preferência</option>
+                  <option value="">Escolha o barbeiro</option>
                   {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
                 </select>
               </>
@@ -1444,6 +1476,19 @@ function App() {
                   <div style={{ marginTop: '14px', borderTop: '1px solid #262626', paddingTop: '12px' }}>
                     <div style={estilos.label}>Valor pago (R$)</div>
                     <input style={estilos.input} value={pagamentoValor} onChange={(e) => setPagamentoValor(e.target.value)} inputMode="decimal" />
+
+                    <div style={estilos.label}>Serviço a mais? (opcional)</div>
+                    <select style={{ ...estilos.input, marginBottom: '6px' }} value="" onChange={(e) => { adicionarExtraPagamento(e.target.value); e.target.value = ''; }}>
+                      <option value="">+ Adicionar serviço extra</option>
+                      {servicos.map((s) => (<option key={s.id} value={s.id}>{s.nome} — R$ {formatarReal(s.preco)}</option>))}
+                    </select>
+                    {extrasPagamento.map((s, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '12px', color: '#c9c9c9', padding: '4px 0' }}>
+                        <span>+ {s.nome} (R$ {formatarReal(s.preco)})</span>
+                        <span onClick={() => removerExtraPagamento(idx)} style={{ color: '#e07a7a', cursor: 'pointer' }}>remover</span>
+                      </div>
+                    ))}
+
                     <div style={estilos.label}>Forma de pagamento</div>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
                       {[['dinheiro', 'Dinheiro'], ['pix', 'Pix'], ['credito', 'Crédito'], ['debito', 'Débito'], ['dividir', 'Dividir'], ['assinatura', 'Assinatura'], ['pacote', 'Pacote']].map(([id, label]) => (
@@ -2051,14 +2096,6 @@ function App() {
                       <>
                         <div style={estilos.voltar} onClick={() => setEtapa('servico')}>← {servicosEscolhidos.map((s) => s.nome).join(' + ')}</div>
                         <p style={estilos.titulo}>EQUIPE DISPONÍVEL</p>
-                        <div onClick={() => setBarbeiroEscolhido({ id: null, nome: 'Sem preferência', semPref: true })}
-                          style={{ display: 'flex', alignItems: 'center', gap: '10px', border: barbeiroEscolhido?.semPref ? '1px solid #C9A227' : '1px solid #333', background: barbeiroEscolhido?.semPref ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
-                          <div style={{ width: '34px', height: '34px', borderRadius: '50%', background: '#1f1f1f', border: '1px solid #444' }}></div>
-                          <div>
-                            <p style={{ margin: 0 }}>Sem preferência</p>
-                            <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#7a7a7a' }}>Exceto segunda-feira</p>
-                          </div>
-                        </div>
                         {barbeiros.map((b) => {
                           const sel = barbeiroEscolhido?.id === b.id && !barbeiroEscolhido?.semPref;
                           return (
