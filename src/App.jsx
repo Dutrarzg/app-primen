@@ -576,7 +576,7 @@ function App() {
     const faixasBloqueadas = bloqueiosFaixa.filter((b) => b.barbeiro_id === null || b.barbeiro_id === barbeiroId);
     // busca TODOS os agendamentos do dia (todos os barbeiros) — o cálculo por barbeiro é feito depois
     const { data: ocupados } = await supabase.from('agendamentos').select('horario, barbeiro_id, duracao_min').eq('data', dataISO).neq('status', 'cancelado');
-    const gradeDia = gradeDoDia(data);
+    const gradeDia = gradeDoDia(data, barbeiroEscolhido?.nome);
     const listaDia = (gradeDia.periodos || []).flat();
     // expande cada agendamento nos slots que ocupa, agrupado por barbeiro_id
     const porBarbeiro = {};
