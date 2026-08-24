@@ -115,6 +115,9 @@ function formatarReal(valor) {
   return Number(valor).toFixed(2).replace('.', ',');
 }
 
+const LABEL_FORMA = { dinheiro: 'Dinheiro', pix: 'Pix', credito: 'Crédito', debito: 'Débito', dividir: 'Dividido', assinatura: 'Assinatura', pacote: 'Pacote', pago: 'Pago' };
+function labelForma(f) { return LABEL_FORMA[f] || 'Pago'; }
+
 function AvatarBarbeiro({ barbeiro, tamanho = 34 }) {
   const iniciais = barbeiro.nome.split(' ').map(w => w[0]).slice(0, 2).join('');
   if (barbeiro.foto_url) {
@@ -145,6 +148,10 @@ function App() {
   const [cadastroNome, setCadastroNome] = useState('');
   const [cadastroSenha, setCadastroSenha] = useState('');
   const [erroLogin, setErroLogin] = useState('');
+  const [modoReset, setModoReset] = useState(false);
+  const [resetSenha, setResetSenha] = useState('');
+  const [resetMsg, setResetMsg] = useState('');
+  const [resetProcessando, setResetProcessando] = useState(false);
   const [processandoLogin, setProcessandoLogin] = useState(false);
 
   const [servicos, setServicos] = useState([]);
@@ -245,7 +252,7 @@ function App() {
   const [remarcarHorario, setRemarcarHorario] = useState('');
   const [remarcarOcupados, setRemarcarOcupados] = useState([]);
   const [remarcarSalvando, setRemarcarSalvando] = useState(false);
-  const [agsPagos, setAgsPagos] = useState([]);
+  const [agsPagos, setAgsPagos] = useState({});
 
   const [mostrarFinanceiro, setMostrarFinanceiro] = useState(false);
   const [movimentacoes, setMovimentacoes] = useState([]);
@@ -345,12 +352,10 @@ function App() {
         });
       }
       const j = sub.toJSON();
-      await supabase.from('push_subs').upsert({
-        barbeiro_id: barbeiroLogado.id,
-        endpoint: j.endpoint,
-        p256dh: j.keys.p256dh,
-        auth: j.keys.auth,
-      }, { onConflict: 'endpoint' });
+      const registro = { endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth };
+      if (barbeiroLogado) registro.barbeiro_id = barbeiroLogado.id;
+      else if (clienteLogado) registro.cliente_id = clienteLogado.id;
+      await supabase.from('push_subs').upsert(registro, { onConflict: 'endpoint' });
       setPushStatus('ativo');
     } catch (e) {
       alert('Não consegui ativar as notificações. Tente novamente.');
@@ -450,6 +455,61 @@ function App() {
     const mesMax = new Date(limite.getFullYear(), limite.getMonth(), 1);
     if (nova < mesMin || nova > mesMax) return; // não sai da janela permitida
     setMesAtual(nova);
+  }
+
+  async function resetarSenhaPeloBarbeiro(a) {
+    const tel = a.clientes?.telefone;
+    if (!tel || tel.startsWith('manual-')) { alert('Esse cliente não tem telefone válido pra redefinir senha.'); return; }
+    const nova = prompt('Nova senha para ' + (a.clientes?.nome || 'o cliente') + ' (mín. 6 caracteres):');
+    if (nova === null) return;
+    if (nova.trim().length < 6) { alert('A senha precisa ter ao menos 6 caracteres.'); return; }
+    try {
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/resetar-senha`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}`, 'apikey': import.meta.env.VITE_SUPABASE_KEY },
+        body: JSON.stringify({ telefone: tel, novaSenha: nova.trim() }),
+      });
+      const j = await resp.json();
+      if (!resp.ok) { alert(j.erro || 'Não consegui trocar a senha.'); return; }
+      alert('Senha redefinida! Passe a nova senha para o cliente.');
+    } catch (e) {
+      alert('Erro de conexão ao redefinir a senha.');
+    }
+  }
+
+  async function resetarSenhaCliente() {
+    setResetMsg('');
+    if (!loginTel.trim() || resetSenha.trim().length < 6) {
+      setResetMsg('Informe o celular e uma nova senha com ao menos 6 caracteres.'); return;
+    }
+    setResetProcessando(true);
+    try {
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/resetar-senha`;
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_KEY}`, 'apikey': import.meta.env.VITE_SUPABASE_KEY },
+        body: JSON.stringify({ telefone: loginTel.trim(), novaSenha: resetSenha.trim() }),
+      });
+      const j = await resp.json();
+      setResetProcessando(false);
+      if (!resp.ok) { setResetMsg(j.erro || 'Não consegui trocar a senha.'); return; }
+      // troca ok: já loga com a senha nova
+      setResetMsg('');
+      setLoginSenha(resetSenha.trim());
+      setModoReset(false);
+      setResetSenha('');
+      const email = telParaEmail(loginTel);
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password: resetSenha.trim() });
+      if (!error && data?.user) {
+        let { data: cli } = await supabase.from('clientes').select('*').eq('auth_id', data.user.id).maybeSingle();
+        if (cli) { localStorage.setItem('primen_tel', loginTel.trim()); setClienteLogado(cli); setTela('menu'); return; }
+      }
+      setErroLogin('Senha alterada! Faça login com a nova senha.');
+    } catch (e) {
+      setResetProcessando(false);
+      setResetMsg('Erro de conexão. Tente de novo.');
+    }
   }
 
   async function tentarEntrar() {
@@ -776,8 +836,10 @@ function App() {
     });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
     const { data: hdia } = await supabase.from('horarios_dia').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
-    const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id').eq('data', dataISO).eq('categoria', 'servico');
-    setAgsPagos((movs || []).map((m) => m.agendamento_id).filter(Boolean));
+    const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id, forma_pagamento').eq('data', dataISO).eq('categoria', 'servico');
+    const mapaPagos = {};
+    (movs || []).forEach((m) => { if (m.agendamento_id) mapaPagos[m.agendamento_id] = m.forma_pagamento || 'pago'; });
+    setAgsPagos(mapaPagos);
     setAgendaDoDia(agsComTotais);
     setBloqueiosDoDia(bloqs || []);
     setHorariosDiaAgenda(hdia || []);
@@ -898,6 +960,7 @@ function App() {
     const barb = barbRef || barbeiroLogado;
     const filtro = filtroOverride !== undefined ? filtroOverride : filtroBarbeiro;
     const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    ini.setDate(ini.getDate() - 7); // margem pra semana que começa no mês anterior
     const fim = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
     let query = supabase.from('movimentacoes')
       .select('*, barbeiros(nome)')
@@ -928,7 +991,18 @@ function App() {
       const hojeISO = dataParaISO(new Date());
       return movimentacoes.filter((m) => m.data === hojeISO);
     }
-    return movimentacoes;
+    if (finPeriodo === 'semana') {
+      const agora = new Date();
+      const diaSemana = (agora.getDay() + 6) % 7; // 0 = segunda
+      const seg = new Date(agora.getFullYear(), agora.getMonth(), agora.getDate() - diaSemana);
+      const dom = new Date(seg.getFullYear(), seg.getMonth(), seg.getDate() + 6);
+      const segISO = dataParaISO(seg), domISO = dataParaISO(dom);
+      return movimentacoes.filter((m) => m.data >= segISO && m.data <= domISO);
+    }
+    // mês corrente (a busca traz margem do mês anterior; filtra aqui)
+    const mesIni = dataParaISO(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const mesFim = dataParaISO(new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0));
+    return movimentacoes.filter((m) => m.data >= mesIni && m.data <= mesFim);
   }
 
   function mudarDiaDono(delta) {
@@ -1326,7 +1400,7 @@ function App() {
           if (carregandoAgenda) return <p style={{ color: '#8a8a8a', textAlign: 'center' }}>Carregando...</p>;
 
           const cardAg = (a) => {
-            const pago = agsPagos.includes(a.id);
+            const pago = agsPagos[a.id];
             if (vistaAgenda === 'grade') {
               return (
                 <div key={a.id} onClick={() => setModalAg(a)}
@@ -1334,7 +1408,7 @@ function App() {
                   <p style={{ margin: 0, fontWeight: 600, fontSize: '12px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
                   <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}</p>
                   <p style={{ margin: '1px 0 0', fontSize: '10px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}</p>
-                  {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago</p>}
+                  {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago · {labelForma(pago)}</p>}
                 </div>
               );
             }
@@ -1345,7 +1419,7 @@ function App() {
                   <span style={{ fontWeight: 600, color: OURO, fontSize: '13px', flexShrink: 0 }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</span>
                   <span style={{ fontSize: '13px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}{a.nome_acompanhante && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> (acomp.)</span>}{!a.nome_acompanhante && a.grupo_id && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> +1</span>}</span>
                 </div>
-                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}{pago ? ' · ✓ pago' : ''}</p>
+                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}{pago ? ' · ✓ pago (' + labelForma(pago) + ')' : ''}</p>
               </div>
             );
           };
@@ -1445,7 +1519,7 @@ function App() {
 
         {modalAg && (() => {
           const a = modalAg;
-          const pago = agsPagos.includes(a.id);
+          const pago = agsPagos[a.id];
           const aberto = pagamentoAg?.id === a.id;
           return (
             <div onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); }}
@@ -1470,7 +1544,7 @@ function App() {
                 <p style={{ margin: '0 0 2px', fontSize: '13px', color: '#c9c9c9' }}>{a.servicosNomes || a.servicos?.nome}</p>
                 <p style={{ margin: '0 0 2px', fontSize: '12px', color: '#8a8a8a' }}>{a.barbeiros?.nome || 'Sem preferência'}</p>
                 {a.clientes?.telefone && !a.clientes.telefone.startsWith('manual-') && <p style={{ margin: 0, fontSize: '12px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
-                {pago && <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago</p>}
+                {pago && <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago · {labelForma(pago)}</p>}
 
                 {aberto ? (
                   <div style={{ marginTop: '14px', borderTop: '1px solid #262626', paddingTop: '12px' }}>
@@ -1509,6 +1583,9 @@ function App() {
                     <button onClick={() => remarcarPeloDono(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #C9A227', background: 'transparent', color: OURO, fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Remarcar</button>
                     {!a.nome_acompanhante && (a.clientes?.id || a.cliente_id) && (
                       <button onClick={() => { setNomeEditado(a.clientes?.nome || ''); setEditandoNome(true); }} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#c9c9c9', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>✏️ Editar nome do cliente</button>
+                    )}
+                    {!a.nome_acompanhante && a.clientes?.telefone && !a.clientes.telefone.startsWith('manual-') && (
+                      <button onClick={() => resetarSenhaPeloBarbeiro(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#c9c9c9', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>🔑 Redefinir senha do cliente</button>
                     )}
                     <button onClick={() => { cancelarAgendamentoDono(a); setModalAg(null); }} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #a33d3d', background: 'transparent', color: '#e07a7a', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Cancelar horário</button>
                   </div>
@@ -1573,7 +1650,7 @@ function App() {
     return (
       <>
         <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
-          {[['dia', 'Hoje'], ['mes', 'Mês']].map(([id, label]) => (
+          {[['dia', 'Hoje'], ['semana', 'Semana'], ['mes', 'Mês']].map(([id, label]) => (
             <div key={id} onClick={() => setFinPeriodo(id)}
               style={{ flex: 1, textAlign: 'center', padding: '8px 0', borderRadius: '8px', fontSize: '12px', cursor: 'pointer', border: finPeriodo === id ? '1px solid #C9A227' : '1px solid #333', background: finPeriodo === id ? 'rgba(201,162,39,0.08)' : 'transparent', color: finPeriodo === id ? OURO : '#8a8a8a' }}>{label}</div>
           ))}
@@ -1932,7 +2009,7 @@ function App() {
 
             {modo === 'cliente' && (
               <div style={estilos.conteudo}>
-                {tela === 'login' && (
+                {tela === 'login' && !modoReset && (
                   <>
                     <p style={estilos.titulo}>ENTRAR</p>
                     <div style={estilos.label}>Celular</div>
@@ -1941,8 +2018,22 @@ function App() {
                     <input style={estilos.input} type="password" value={loginSenha} onChange={(e) => setLoginSenha(e.target.value)} placeholder="Sua senha" />
                     {erroLogin && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroLogin}</p>}
                     <button onClick={tentarEntrar} disabled={processandoLogin} style={estilos.botao(!processandoLogin)}>{processandoLogin ? 'Entrando...' : 'Entrar'}</button>
+                    <p style={estilos.link} onClick={() => { setModoReset(true); setErroLogin(''); setResetMsg(''); }}>Esqueci a senha</p>
                     <p style={{ fontSize: '11px', color: '#6b6b6b', textAlign: 'center', marginTop: '14px' }}>Primeira vez? É só digitar seu celular e uma senha nova que criamos sua conta.</p>
                     <p style={estilos.link} onClick={() => setModo('login-equipe')}>Acesso da equipe</p>
+                  </>
+                )}
+
+                {tela === 'login' && modoReset && (
+                  <>
+                    <p style={estilos.titulo}>REDEFINIR SENHA</p>
+                    <div style={estilos.label}>Celular do cadastro</div>
+                    <input style={estilos.input} value={loginTel} onChange={(e) => setLoginTel(formatarTelefone(e.target.value))} placeholder="(32) 99999-9999" inputMode="numeric" autoComplete="tel" />
+                    <div style={estilos.label}>Nova senha (mín. 6 caracteres)</div>
+                    <input style={estilos.input} type="password" value={resetSenha} onChange={(e) => setResetSenha(e.target.value)} placeholder="Nova senha" autoComplete="new-password" />
+                    {resetMsg && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{resetMsg}</p>}
+                    <button onClick={resetarSenhaCliente} disabled={resetProcessando} style={estilos.botao(!resetProcessando)}>{resetProcessando ? 'Salvando...' : 'Salvar nova senha'}</button>
+                    <p style={estilos.link} onClick={() => { setModoReset(false); setResetMsg(''); setResetSenha(''); }}>← Voltar ao login</p>
                   </>
                 )}
 
@@ -1981,6 +2072,19 @@ function App() {
                   <p style={{ margin: 0, fontWeight: 500, fontSize: '16px' }}>Meus horários</p>
                   <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#8a8a8a' }}>Ver, remarcar ou cancelar</p>
                 </div>
+                {pushStatus !== 'ativo' && pushStatus !== 'sem-suporte' && (
+                  <div onClick={ativarNotificacoes} style={{ display: 'flex', alignItems: 'center', gap: '10px', border: '1px dashed #444', borderRadius: '12px', padding: '14px', cursor: 'pointer' }}>
+                    <span style={{ fontSize: '20px' }}>🔔</span>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ margin: 0, fontSize: '13px', color: '#f2f2f2', fontWeight: 500 }}>{pushStatus === 'bloqueado' ? 'Notificações bloqueadas' : 'Ativar lembretes'}</p>
+                      <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{pushStatus === 'bloqueado' ? 'Libere nas configurações do navegador' : 'Receba um lembrete 30 min antes do seu horário'}</p>
+                    </div>
+                    {pushStatus !== 'bloqueado' && <span style={{ color: OURO, fontSize: '13px', fontWeight: 600 }}>Ativar</span>}
+                  </div>
+                )}
+                {pushStatus === 'ativo' && (
+                  <p style={{ fontSize: '11px', color: '#6b8a6b', textAlign: 'center' }}>🔔 Lembretes ativos neste aparelho</p>
+                )}
                   </>
                 )}
 
