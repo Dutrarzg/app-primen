@@ -234,6 +234,13 @@ function App() {
   const [erroProduto, setErroProduto] = useState('');
   const [vendaProduto, setVendaProduto] = useState(null);
   const [vendaQtd, setVendaQtd] = useState('1');
+  const [mostrarServicos, setMostrarServicos] = useState(false);
+  const [mostrarFormServico, setMostrarFormServico] = useState(false);
+  const [svcNome, setSvcNome] = useState('');
+  const [svcPreco, setSvcPreco] = useState('');
+  const [svcDuracao, setSvcDuracao] = useState('');
+  const [svcEditandoId, setSvcEditandoId] = useState(null);
+  const [erroServico, setErroServico] = useState('');
   const [erroVenda, setErroVenda] = useState('');
 
   const [pagamentoAg, setPagamentoAg] = useState(null);
@@ -889,6 +896,50 @@ function App() {
     carregarProdutos();
   }
 
+  async function recarregarServicos() {
+    const { data } = await supabase.from('servicos').select('*').order('preco', { ascending: true });
+    setServicos(data || []);
+  }
+
+  function abrirFormNovoServico() {
+    setSvcEditandoId(null);
+    setSvcNome(''); setSvcPreco(''); setSvcDuracao('');
+    setErroServico('');
+    setMostrarFormServico(true);
+  }
+
+  function abrirFormEditarServico(s) {
+    setSvcEditandoId(s.id);
+    setSvcNome(s.nome);
+    setSvcPreco(String(s.preco).replace('.', ','));
+    setSvcDuracao(String(s.duracao_min || ''));
+    setErroServico('');
+    setMostrarFormServico(true);
+  }
+
+  async function salvarServico() {
+    setErroServico('');
+    if (!svcNome.trim()) { setErroServico('Digite o nome do serviço.'); return; }
+    const precoNum = parseFloat(svcPreco.replace(',', '.')) || 0;
+    let duracaoNum = parseInt(svcDuracao) || 0;
+    if (duracaoNum <= 0) { setErroServico('Informe a duração em minutos (ex: 30).'); return; }
+    // arredonda pra múltiplo de 15 (a grade é de 15 em 15)
+    duracaoNum = Math.max(15, Math.ceil(duracaoNum / 15) * 15);
+    if (svcEditandoId) {
+      await supabase.from('servicos').update({ nome: svcNome.trim(), preco: precoNum, duracao_min: duracaoNum }).eq('id', svcEditandoId);
+    } else {
+      await supabase.from('servicos').insert({ nome: svcNome.trim(), preco: precoNum, duracao_min: duracaoNum });
+    }
+    setMostrarFormServico(false);
+    setSvcNome(''); setSvcPreco(''); setSvcDuracao(''); setSvcEditandoId(null);
+    recarregarServicos();
+  }
+
+  async function removerServico(id) {
+    await supabase.from('servicos').delete().eq('id', id);
+    recarregarServicos();
+  }
+
   function abrirVenda(p) {
     setVendaProduto(p);
     setVendaQtd('1');
@@ -1409,6 +1460,8 @@ function App() {
 
         {GrupoProdutos()}
 
+        {GrupoServicos()}
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', marginBottom: '10px' }}>
           <p style={{ ...estilos.titulo, margin: 0 }}>{ehAdmin ? 'AGENDA DO DIA' : 'MINHA AGENDA'}</p>
           <div style={{ display: 'flex', gap: '4px' }}>
@@ -1899,6 +1952,61 @@ function App() {
                   ) : (
                     p.estoque > 0 && <button style={{ ...estilos.botaoSec, marginTop: '10px', marginBottom: 0 }} onClick={() => abrirVenda(p)}>Vender / dar baixa</button>
                   )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function GrupoServicos() {
+    if (!ehAdmin) return null;
+    return (
+      <>
+        <button style={{ ...estilos.botaoSec, marginTop: '8px' }} onClick={() => { setMostrarServicos(!mostrarServicos); setMostrarFormServico(false); }}>
+          {mostrarServicos ? 'Esconder serviços' : '✂️ Serviços e preços'}
+        </button>
+
+        {mostrarServicos && (
+          <div style={{ marginTop: '8px' }}>
+            <button style={estilos.botaoSec} onClick={() => { if (mostrarFormServico) { setMostrarFormServico(false); } else { abrirFormNovoServico(); } }}>
+              {mostrarFormServico ? 'Cancelar' : '+ Novo serviço'}
+            </button>
+
+            {mostrarFormServico && (
+              <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
+                <div style={estilos.label}>Nome do serviço</div>
+                <input style={estilos.input} value={svcNome} onChange={(e) => setSvcNome(e.target.value)} placeholder="Ex: Corte + barba" />
+                <div style={estilos.label}>Preço (R$)</div>
+                <input style={estilos.input} value={svcPreco} onChange={(e) => setSvcPreco(e.target.value)} placeholder="Ex: 45,00" inputMode="decimal" />
+                <div style={estilos.label}>Duração (minutos)</div>
+                <input style={estilos.input} value={svcDuracao} onChange={(e) => setSvcDuracao(e.target.value)} placeholder="Ex: 30" inputMode="numeric" />
+                <p style={{ fontSize: '11px', color: '#6b6b6b', margin: '0 0 8px' }}>A agenda trabalha de 15 em 15 min — a duração é arredondada pra cima (ex: 20 → 30).</p>
+                {erroServico && <p style={{ color: '#e07a7a', fontSize: '12px' }}>{erroServico}</p>}
+                <button style={estilos.botao(true)} onClick={salvarServico}>{svcEditandoId ? 'Salvar alterações' : 'Adicionar serviço'}</button>
+              </div>
+            )}
+
+            {servicos.length === 0 ? (
+              <div style={{ textAlign: 'center', border: '1px dashed #333', borderRadius: '8px', padding: '20px', color: '#6b6b6b', fontSize: '13px' }}>
+                Nenhum serviço cadastrado ainda.
+              </div>
+            ) : (
+              servicos.map((s) => (
+                <div key={s.id} style={{ border: '1px solid #262626', borderRadius: '8px', padding: '12px', marginBottom: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>{s.nome}</p>
+                      <p style={{ margin: '2px 0 0', fontSize: '13px', color: OURO }}>R$ {formatarReal(s.preco)}</p>
+                      <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a' }}>{s.duracao_min || 15} min</p>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
+                      <span onClick={() => abrirFormEditarServico(s)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>editar</span>
+                      <span onClick={() => { if (confirm('Remover ' + s.nome + '? Isso não afeta agendamentos já feitos.')) removerServico(s.id); }} style={{ fontSize: '11px', color: '#e07a7a', cursor: 'pointer' }}>remover</span>
+                    </div>
+                  </div>
                 </div>
               ))
             )}
