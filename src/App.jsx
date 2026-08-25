@@ -240,6 +240,7 @@ function App() {
   const [pagamentoValor, setPagamentoValor] = useState('');
   const [formaPagamento, setFormaPagamento] = useState('dinheiro');
   const [extrasPagamento, setExtrasPagamento] = useState([]);
+  const [editandoPagamentoMovId, setEditandoPagamentoMovId] = useState(null);
   const [vistaAgenda, setVistaAgenda] = useState('lista');
   const [mostrarCalendarioDono, setMostrarCalendarioDono] = useState(false);
   const [modalAg, setModalAg] = useState(null);
@@ -836,9 +837,9 @@ function App() {
     });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
     const { data: hdia } = await supabase.from('horarios_dia').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
-    const { data: movs } = await supabase.from('movimentacoes').select('agendamento_id, forma_pagamento').eq('data', dataISO).eq('categoria', 'servico');
+    const { data: movs } = await supabase.from('movimentacoes').select('id, agendamento_id, forma_pagamento, valor').eq('data', dataISO).eq('categoria', 'servico');
     const mapaPagos = {};
-    (movs || []).forEach((m) => { if (m.agendamento_id) mapaPagos[m.agendamento_id] = m.forma_pagamento || 'pago'; });
+    (movs || []).forEach((m) => { if (m.agendamento_id) mapaPagos[m.agendamento_id] = { forma: m.forma_pagamento || 'pago', valor: Number(m.valor) || 0, movId: m.id }; });
     setAgsPagos(mapaPagos);
     setAgendaDoDia(agsComTotais);
     setBloqueiosDoDia(bloqs || []);
@@ -915,8 +916,18 @@ function App() {
     setPagamentoAg(ag);
     setFormaPagamento('dinheiro');
     setExtrasPagamento([]);
+    setEditandoPagamentoMovId(null);
     const valor = ag.servicosTotal != null ? ag.servicosTotal : (ag.servicos?.preco || 0);
     setPagamentoValor(valor ? String(valor).replace('.', ',') : '');
+  }
+
+  function abrirEdicaoPagamento(ag) {
+    const p = agsPagos[ag.id];
+    setPagamentoAg(ag);
+    setExtrasPagamento([]);
+    setEditandoPagamentoMovId(p?.movId || null);
+    setFormaPagamento(p?.forma || 'dinheiro');
+    setPagamentoValor(p ? String(p.valor).replace('.', ',') : '');
   }
 
   function baseValorPagamento(ag) {
@@ -927,16 +938,17 @@ function App() {
     if (!servicoId) return;
     const svc = servicos.find((s) => s.id === servicoId);
     if (!svc) return;
-    const novos = [...extrasPagamento, svc];
-    setExtrasPagamento(novos);
-    const total = baseValorPagamento(pagamentoAg) + novos.reduce((s, x) => s + Number(x.preco), 0);
+    setExtrasPagamento([...extrasPagamento, svc]);
+    const atual = parseFloat((pagamentoValor || '0').replace(',', '.')) || 0;
+    const total = atual + Number(svc.preco);
     setPagamentoValor(String(total.toFixed(2)).replace('.', ','));
   }
 
   function removerExtraPagamento(idx) {
-    const novos = extrasPagamento.filter((_, i) => i !== idx);
-    setExtrasPagamento(novos);
-    const total = baseValorPagamento(pagamentoAg) + novos.reduce((s, x) => s + Number(x.preco), 0);
+    const svc = extrasPagamento[idx];
+    setExtrasPagamento(extrasPagamento.filter((_, i) => i !== idx));
+    const atual = parseFloat((pagamentoValor || '0').replace(',', '.')) || 0;
+    const total = Math.max(0, atual - Number(svc?.preco || 0));
     setPagamentoValor(String(total.toFixed(2)).replace('.', ','));
   }
 
@@ -945,12 +957,21 @@ function App() {
     const nomesExtras = extrasPagamento.map((s) => s.nome).join(' + ');
     const descBase = pagamentoAg.servicosNomes || pagamentoAg.servicos?.nome || 'serviço';
     const desc = nomesExtras ? `${descBase} + ${nomesExtras}` : descBase;
-    await supabase.from('movimentacoes').insert({
-      descricao: `Atendimento: ${desc} (${pagamentoAg.clientes?.nome || 'cliente'})`,
-      valor: valorNum, categoria: 'servico', barbeiro_id: pagamentoAg.barbeiro_id || null,
-      agendamento_id: pagamentoAg.id, data: dataParaISO(dataDono), forma_pagamento: formaPagamento,
-    });
+    if (editandoPagamentoMovId) {
+      // editando um pagamento já registrado: atualiza a movimentação
+      await supabase.from('movimentacoes').update({
+        descricao: `Atendimento: ${desc} (${pagamentoAg.clientes?.nome || 'cliente'})`,
+        valor: valorNum, forma_pagamento: formaPagamento,
+      }).eq('id', editandoPagamentoMovId);
+    } else {
+      await supabase.from('movimentacoes').insert({
+        descricao: `Atendimento: ${desc} (${pagamentoAg.clientes?.nome || 'cliente'})`,
+        valor: valorNum, categoria: 'servico', barbeiro_id: pagamentoAg.barbeiro_id || null,
+        agendamento_id: pagamentoAg.id, data: dataParaISO(dataDono), forma_pagamento: formaPagamento,
+      });
+    }
     setExtrasPagamento([]);
+    setEditandoPagamentoMovId(null);
     setPagamentoAg(null);
     carregarAgenda(dataDono);
     carregarFinanceiro();
@@ -1408,7 +1429,7 @@ function App() {
                   <p style={{ margin: 0, fontWeight: 600, fontSize: '12px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
                   <p style={{ margin: '2px 0 0', fontSize: '12px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}</p>
                   <p style={{ margin: '1px 0 0', fontSize: '10px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}</p>
-                  {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago · {labelForma(pago)}</p>}
+                  {pago && <p style={{ margin: '2px 0 0', fontSize: '10px', color: '#5cb67a' }}>✓ Pago · {labelForma(pago.forma)} · R$ {formatarReal(pago.valor)}</p>}
                 </div>
               );
             }
@@ -1419,7 +1440,7 @@ function App() {
                   <span style={{ fontWeight: 600, color: OURO, fontSize: '13px', flexShrink: 0 }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</span>
                   <span style={{ fontSize: '13px', color: '#f2f2f2', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.nome_acompanhante || a.clientes?.nome || 'Cliente'}{a.nome_acompanhante && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> (acomp.)</span>}{!a.nome_acompanhante && a.grupo_id && <span style={{ fontSize: '10px', color: '#8a8a8a' }}> +1</span>}</span>
                 </div>
-                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}{pago ? ' · ✓ pago (' + labelForma(pago) + ')' : ''}</p>
+                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#8a8a8a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.servicosNomes || a.servicos?.nome}{pago ? ' · ✓ pago (' + labelForma(pago.forma) + ' R$ ' + formatarReal(pago.valor) + ')' : ''}</p>
               </div>
             );
           };
@@ -1522,13 +1543,13 @@ function App() {
           const pago = agsPagos[a.id];
           const aberto = pagamentoAg?.id === a.id;
           return (
-            <div onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); }}
+            <div onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); setEditandoPagamentoMovId(null); }}
               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100, padding: '20px' }}>
               <div onClick={(e) => e.stopPropagation()}
                 style={{ background: '#161616', border: '1px solid #333', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '340px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '4px' }}>
                   <p style={{ margin: 0, fontWeight: 700, fontSize: '18px', color: OURO }}>{a.horario.slice(0, 5)}{(a.duracao_min && a.duracao_min > 15) ? '–' + horarioFim(a.horario, a.duracao_min) : ''}</p>
-                  <span onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); }} style={{ fontSize: '18px', color: '#8a8a8a', cursor: 'pointer', lineHeight: 1 }}>×</span>
+                  <span onClick={() => { setModalAg(null); setPagamentoAg(null); setEditandoNome(false); setEditandoPagamentoMovId(null); }} style={{ fontSize: '18px', color: '#8a8a8a', cursor: 'pointer', lineHeight: 1 }}>×</span>
                 </div>
                 {editandoNome && !a.nome_acompanhante ? (
                   <div style={{ margin: '4px 0 8px' }}>
@@ -1544,7 +1565,7 @@ function App() {
                 <p style={{ margin: '0 0 2px', fontSize: '13px', color: '#c9c9c9' }}>{a.servicosNomes || a.servicos?.nome}</p>
                 <p style={{ margin: '0 0 2px', fontSize: '12px', color: '#8a8a8a' }}>{a.barbeiros?.nome || 'Sem preferência'}</p>
                 {a.clientes?.telefone && !a.clientes.telefone.startsWith('manual-') && <p style={{ margin: 0, fontSize: '12px', color: '#6b6b6b' }}>{a.clientes.telefone}</p>}
-                {pago && <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago · {labelForma(pago)}</p>}
+                {pago && <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#5cb67a', fontWeight: 500 }}>✓ Pago · {labelForma(pago.forma)} · R$ {formatarReal(pago.valor)}</p>}
 
                 {aberto ? (
                   <div style={{ marginTop: '14px', borderTop: '1px solid #262626', paddingTop: '12px' }}>
@@ -1570,8 +1591,8 @@ function App() {
                       ))}
                     </div>
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={() => { confirmarPagamento(); setModalAg(null); }}>Confirmar</button>
-                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => setPagamentoAg(null)}>Voltar</button>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }} onClick={() => { confirmarPagamento(); setModalAg(null); }}>{editandoPagamentoMovId ? 'Salvar alteração' : 'Confirmar'}</button>
+                      <button style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#f2f2f2', fontSize: '13px', cursor: 'pointer' }} onClick={() => { setPagamentoAg(null); setEditandoPagamentoMovId(null); }}>Voltar</button>
                     </div>
                   </div>
                 ) : (
@@ -1580,6 +1601,7 @@ function App() {
                       <button onClick={() => whatsappCliente(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: 'none', background: '#25D366', color: '#fff', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>💬 WhatsApp do cliente</button>
                     )}
                     {!pago && <button onClick={() => abrirPagamento(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: 'none', background: OURO, color: '#0d0d0d', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Marcar como pago</button>}
+                    {pago && <button onClick={() => abrirEdicaoPagamento(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #5cb67a', background: 'transparent', color: '#5cb67a', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>✏️ Editar pagamento</button>}
                     <button onClick={() => remarcarPeloDono(a)} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #C9A227', background: 'transparent', color: OURO, fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>Remarcar</button>
                     {!a.nome_acompanhante && (a.clientes?.id || a.cliente_id) && (
                       <button onClick={() => { setNomeEditado(a.clientes?.nome || ''); setEditandoNome(true); }} style={{ width: '100%', padding: '11px', borderRadius: '8px', border: '1px solid #333', background: 'transparent', color: '#c9c9c9', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>✏️ Editar nome do cliente</button>
