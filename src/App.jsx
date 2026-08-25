@@ -155,6 +155,7 @@ function App() {
   const [processandoLogin, setProcessandoLogin] = useState(false);
 
   const [servicos, setServicos] = useState([]);
+  const [bloqueiosServico, setBloqueiosServico] = useState([]);
   const [barbeiros, setBarbeiros] = useState([]);
   const [carregando, setCarregando] = useState(true);
 
@@ -241,6 +242,7 @@ function App() {
   const [svcDuracao, setSvcDuracao] = useState('');
   const [svcEditandoId, setSvcEditandoId] = useState(null);
   const [erroServico, setErroServico] = useState('');
+  const [configBarbeiro, setConfigBarbeiro] = useState('');
   const [erroVenda, setErroVenda] = useState('');
 
   const [pagamentoAg, setPagamentoAg] = useState(null);
@@ -280,8 +282,10 @@ function App() {
     async function buscarDados() {
       const { data: servicosData } = await supabase.from('servicos').select('*').order('preco', { ascending: true });
       const { data: barbeirosData } = await supabase.from('barbeiros').select('*').eq('ativo', true);
+      const { data: bloqData } = await supabase.from('barbeiro_servicos_bloqueados').select('barbeiro_id, servico_id');
       setServicos(servicosData || []);
       setBarbeiros(barbeirosData || []);
+      setBloqueiosServico(bloqData || []);
 
       setCarregando(false);
     }
@@ -899,6 +903,30 @@ function App() {
   async function recarregarServicos() {
     const { data } = await supabase.from('servicos').select('*').order('preco', { ascending: true });
     setServicos(data || []);
+  }
+
+  async function recarregarBloqueios() {
+    const { data } = await supabase.from('barbeiro_servicos_bloqueados').select('barbeiro_id, servico_id');
+    setBloqueiosServico(data || []);
+  }
+
+  // true se o barbeiro faz TODOS os serviços da lista (nenhum bloqueado pra ele)
+  function barbeiroFazTodos(barbeiroId, servicosIds) {
+    return !servicosIds.some((sid) => bloqueiosServico.some((b) => b.barbeiro_id === barbeiroId && b.servico_id === sid));
+  }
+
+  function barbeiroBloqueiaServico(barbeiroId, servicoId) {
+    return bloqueiosServico.some((b) => b.barbeiro_id === barbeiroId && b.servico_id === servicoId);
+  }
+
+  async function alternarServicoBarbeiro(barbeiroId, servicoId) {
+    const bloqueado = barbeiroBloqueiaServico(barbeiroId, servicoId);
+    if (bloqueado) {
+      await supabase.from('barbeiro_servicos_bloqueados').delete().eq('barbeiro_id', barbeiroId).eq('servico_id', servicoId);
+    } else {
+      await supabase.from('barbeiro_servicos_bloqueados').insert({ barbeiro_id: barbeiroId, servico_id: servicoId });
+    }
+    recarregarBloqueios();
   }
 
   function abrirFormNovoServico() {
@@ -2010,6 +2038,25 @@ function App() {
                 </div>
               ))
             )}
+
+            <div style={{ borderTop: '1px solid #262626', marginTop: '14px', paddingTop: '12px' }}>
+              <p style={{ fontSize: '12px', color: '#c9c9c9', fontWeight: 600, margin: '0 0 8px' }}>Quem faz cada serviço</p>
+              <p style={{ fontSize: '11px', color: '#8a8a8a', margin: '0 0 8px' }}>Por padrão todos fazem tudo. Desmarque os que o barbeiro NÃO faz.</p>
+              <select style={estilos.input} value={configBarbeiro} onChange={(e) => setConfigBarbeiro(e.target.value)}>
+                <option value="">Escolha um barbeiro</option>
+                {barbeiros.map((b) => (<option key={b.id} value={b.id}>{b.nome}</option>))}
+              </select>
+              {configBarbeiro && servicos.map((s) => {
+                const faz = !barbeiroBloqueiaServico(configBarbeiro, s.id);
+                return (
+                  <div key={s.id} onClick={() => alternarServicoBarbeiro(configBarbeiro, s.id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: '10px', border: '1px solid #262626', borderRadius: '8px', padding: '9px 12px', marginBottom: '6px', cursor: 'pointer' }}>
+                    <span style={{ width: '20px', height: '20px', borderRadius: '5px', border: faz ? '1px solid ' + OURO : '1px solid #444', background: faz ? OURO : 'transparent', color: '#0d0d0d', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '13px', fontWeight: 700 }}>{faz ? '✓' : ''}</span>
+                    <span style={{ fontSize: '13px', color: faz ? '#f2f2f2' : '#6b6b6b' }}>{s.nome}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </>
@@ -2330,19 +2377,26 @@ function App() {
                       <>
                         <div style={estilos.voltar} onClick={() => setEtapa('servico')}>← {servicosEscolhidos.map((s) => s.nome).join(' + ')}</div>
                         <p style={estilos.titulo}>EQUIPE DISPONÍVEL</p>
-                        {barbeiros.map((b) => {
-                          const sel = barbeiroEscolhido?.id === b.id && !barbeiroEscolhido?.semPref;
-                          return (
-                            <div key={b.id} onClick={() => setBarbeiroEscolhido(b)}
-                              style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
-                              <AvatarBarbeiro barbeiro={b} tamanho={34} />
-                              <div>
-                                <p style={{ margin: 0 }}>{b.nome}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
+                        {(() => {
+                          const idsServ = servicosEscolhidos.map((s) => s.id);
+                          const disp = barbeiros.filter((b) => barbeiroFazTodos(b.id, idsServ));
+                          if (disp.length === 0) {
+                            return <div style={{ textAlign: 'center', border: '1px dashed #444', borderRadius: '8px', padding: '16px', color: '#8a8a8a', fontSize: '13px' }}>Nenhum barbeiro faz essa combinação de serviços. Volte e ajuste os serviços.</div>;
+                          }
+                          return disp.map((b) => {
+                            const sel = barbeiroEscolhido?.id === b.id && !barbeiroEscolhido?.semPref;
+                            return (
+                              <div key={b.id} onClick={() => setBarbeiroEscolhido(b)}
+                                style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
+                                <AvatarBarbeiro barbeiro={b} tamanho={34} />
+                                <div>
+                                  <p style={{ margin: 0 }}>{b.nome}</p>
+                                  <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          });
+                        })()}
                         <button disabled={!barbeiroEscolhido} onClick={() => setEtapa(temAcompanhante ? 'servico-filho' : 'dataHora')} style={estilos.botao(!!barbeiroEscolhido)}>Continuar</button>
                       </>
                     )}
@@ -2380,19 +2434,26 @@ function App() {
                       <>
                         <div style={estilos.voltar} onClick={() => setEtapa('servico-filho')}>← Voltar</div>
                         <p style={estilos.titulo}>BARBEIRO DE {nomeFilho.toUpperCase()}</p>
-                        {barbeiros.map((b) => {
-                          const sel = barbeiroFilho?.id === b.id;
-                          return (
-                            <div key={b.id} onClick={() => setBarbeiroFilho(b)}
-                              style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
-                              <AvatarBarbeiro barbeiro={b} tamanho={34} />
-                              <div>
-                                <p style={{ margin: 0 }}>{b.nome}</p>
-                                <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
+                        {(() => {
+                          const idsServ = servicosFilho.map((s) => s.id);
+                          const disp = barbeiros.filter((b) => barbeiroFazTodos(b.id, idsServ));
+                          if (disp.length === 0) {
+                            return <div style={{ textAlign: 'center', border: '1px dashed #444', borderRadius: '8px', padding: '16px', color: '#8a8a8a', fontSize: '13px' }}>Nenhum barbeiro faz essa combinação. Volte e ajuste os serviços.</div>;
+                          }
+                          return disp.map((b) => {
+                            const sel = barbeiroFilho?.id === b.id;
+                            return (
+                              <div key={b.id} onClick={() => setBarbeiroFilho(b)}
+                                style={{ display: 'flex', alignItems: 'center', gap: '10px', border: sel ? '1px solid #C9A227' : '1px solid #333', background: sel ? 'rgba(201,162,39,0.08)' : 'transparent', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}>
+                                <AvatarBarbeiro barbeiro={b} tamanho={34} />
+                                <div>
+                                  <p style={{ margin: 0 }}>{b.nome}</p>
+                                  <p style={{ margin: '2px 0 0', fontSize: '10px', color: OURO }}>★ {Number(b.nota).toFixed(1)}</p>
+                                </div>
                               </div>
-                            </div>
-                          );
-                        })}
+                            );
+                          });
+                        })()}
                         <button disabled={!barbeiroFilho} onClick={() => setEtapa('dataHora')} style={estilos.botao(!!barbeiroFilho)}>Continuar</button>
                       </>
                     )}
