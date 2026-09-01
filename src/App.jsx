@@ -859,7 +859,7 @@ function App() {
       const duracaoEfetiva = Math.max(Number(a.duracao_min || 0), durArredondada, 15);
       return { ...a, servicosNomes: nomes, servicosTotal: total, duracao_min: duracaoEfetiva };
     });
-    const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
+    const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo, hora_inicio, hora_fim').eq('data', dataISO);
     const { data: hdia } = await supabase.from('horarios_dia').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
     const { data: movs } = await supabase.from('movimentacoes').select('id, agendamento_id, forma_pagamento, valor').eq('data', dataISO).eq('categoria', 'servico');
     const mapaPagos = {};
@@ -1273,7 +1273,8 @@ function App() {
   }
 
   async function salvarBloqueio() {
-    const barbeiroId = bloqueioBarbeiro === 'todos' ? null : bloqueioBarbeiro;
+    // barbeiro comum só pode bloquear o próprio horário; admin escolhe (todos ou um barbeiro)
+    const barbeiroId = !ehAdmin ? barbeiroLogado.id : (bloqueioBarbeiro === 'todos' ? null : bloqueioBarbeiro);
     if (!bloqueioData) { alert('Escolha o dia.'); return; }
     if (bloqueioInicio && bloqueioFim && bloqueioFim <= bloqueioInicio) {
       alert('A hora de fim precisa ser maior que a de início.'); return;
@@ -1396,7 +1397,7 @@ function App() {
               {b.barbeiro_id === null ? 'Barbearia' : (barbeiros.find((x) => x.id === b.barbeiro_id)?.nome?.split(' ')[0] || 'barbeiro')}
               {b.motivo ? ' · ' + b.motivo : ''}
             </span>
-            {ehAdmin && <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>}
+            {(ehAdmin || b.barbeiro_id === barbeiroLogado?.id) && <span onClick={() => removerBloqueio(b.id)} style={{ fontSize: '11px', color: '#C9A227', cursor: 'pointer' }}>reabrir</span>}
           </div>
         ))}
 
@@ -2083,28 +2084,32 @@ function App() {
   function BlocoAdminExtra() {
     return (
       <>
-        {ehAdmin && (
-          <button style={estilos.botaoSec} onClick={() => { if (!mostrarFormBloqueio) setBloqueioData(dataParaISO(dataDono)); setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
-            {mostrarFormBloqueio ? 'Cancelar' : 'Fechar / bloquear este dia'}
+        {barbeiroLogado && (
+          <button style={estilos.botaoSec} onClick={() => { if (!mostrarFormBloqueio) { setBloqueioData(dataParaISO(dataDono)); setBloqueioBarbeiro(ehAdmin ? 'todos' : barbeiroLogado.id); } setMostrarFormBloqueio(!mostrarFormBloqueio); setMostrarFormManual(false); }}>
+            {mostrarFormBloqueio ? 'Cancelar' : '🔒 Fechar / bloquear horário'}
           </button>
         )}
-        {ehAdmin && mostrarFormBloqueio && (
+        {barbeiroLogado && mostrarFormBloqueio && (
           <div style={{ border: '1px solid #333', borderRadius: '8px', padding: '12px', marginBottom: '12px' }}>
             <div style={estilos.label}>Dia</div>
             <input type="date" style={{ ...estilos.input, marginBottom: '8px' }} value={bloqueioData} onChange={(e) => setBloqueioData(e.target.value)} />
-            <div style={estilos.label}>Fechar para</div>
-            <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
-              <option value="todos">Barbearia toda</option>
-              {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
-            </select>
+            {ehAdmin ? (
+              <>
+                <div style={estilos.label}>Fechar para</div>
+                <select style={estilos.input} value={bloqueioBarbeiro} onChange={(e) => setBloqueioBarbeiro(e.target.value)}>
+                  <option value="todos">Barbearia toda</option>
+                  {barbeiros.map((b) => (<option key={b.id} value={b.id}>Só {b.nome}</option>))}
+                </select>
+              </>
+            ) : null}
             <div style={estilos.label}>Horário (deixe vazio pra fechar o dia todo)</div>
-                        <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioInicio} onChange={(e) => setBloqueioInicio(e.target.value)} />
-                          <span style={{ color: '#8a8a8a', alignSelf: 'center' }}>até</span>
-                          <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioFim} onChange={(e) => setBloqueioFim(e.target.value)} />
-                        </div>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+              <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioInicio} onChange={(e) => setBloqueioInicio(e.target.value)} />
+              <span style={{ color: '#8a8a8a', alignSelf: 'center' }}>até</span>
+              <input type="time" style={{ ...estilos.input, flex: 1 }} value={bloqueioFim} onChange={(e) => setBloqueioFim(e.target.value)} />
+            </div>
             <div style={estilos.label}>Motivo (opcional)</div>
-            <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, feriado" />
+            <input style={estilos.input} value={bloqueioMotivo} onChange={(e) => setBloqueioMotivo(e.target.value)} placeholder="Ex: folga, almoço estendido, compromisso" />
             <button style={estilos.botao(true)} onClick={salvarBloqueio}>Confirmar bloqueio</button>
           </div>
         )}
