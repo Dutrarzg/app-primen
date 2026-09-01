@@ -647,14 +647,21 @@ function App() {
     }
     const faixasBloqueadas = bloqueiosFaixa.filter((b) => b.barbeiro_id === null || b.barbeiro_id === barbeiroId);
     // busca TODOS os agendamentos do dia (todos os barbeiros) — o cálculo por barbeiro é feito depois
-    const { data: ocupados } = await supabase.from('agendamentos').select('horario, barbeiro_id, duracao_min').eq('data', dataISO).neq('status', 'cancelado');
+    const { data: ocupados } = await supabase.from('agendamentos').select('horario, barbeiro_id, duracao_min, servicos(duracao_min), agendamento_servicos(servicos(duracao_min))').eq('data', dataISO).neq('status', 'cancelado');
     const gradeDia = gradeDoDia(data, barbeiroEscolhido?.nome);
     const listaDia = (gradeDia.periodos || []).flat();
     // expande cada agendamento nos slots que ocupa, agrupado por barbeiro_id
     const porBarbeiro = {};
     (ocupados || []).forEach((o) => {
       const ini = o.horario.slice(0, 5);
-      const slots = Math.max(1, Math.ceil((o.duracao_min || 15) / 15));
+      // duração efetiva: nunca menor que a soma das durações dos serviços (conserta dados antigos)
+      const listaServ = (o.agendamento_servicos || []).map((r) => r.servicos).filter(Boolean);
+      const durServ = listaServ.length > 0
+        ? listaServ.reduce((s, x) => s + Number(x.duracao_min || 0), 0)
+        : Number(o.servicos?.duracao_min || 0);
+      const durArr = durServ > 0 ? Math.ceil(durServ / 15) * 15 : 0;
+      const duracaoEfetiva = Math.max(Number(o.duracao_min || 0), durArr, 15);
+      const slots = Math.max(1, Math.ceil(duracaoEfetiva / 15));
       const idx = listaDia.indexOf(ini);
       const bid = o.barbeiro_id || 'sem';
       if (!porBarbeiro[bid]) porBarbeiro[bid] = [];
@@ -835,7 +842,7 @@ function App() {
     const dataISO = dataParaISO(data);
     let query = supabase
       .from('agendamentos')
-      .select('id, horario, status, origem, servico_id, barbeiro_id, duracao_min, nome_acompanhante, grupo_id, clientes(id, nome, telefone), servicos(nome, preco), barbeiros(nome), agendamento_servicos(servicos(nome, preco))')
+      .select('id, horario, status, origem, servico_id, barbeiro_id, duracao_min, nome_acompanhante, grupo_id, clientes(id, nome, telefone), servicos(nome, preco, duracao_min), barbeiros(nome), agendamento_servicos(servicos(nome, preco, duracao_min))')
       .eq('data', dataISO).neq('status', 'cancelado');
     if (barb && barb.nivel !== 'admin') query = query.eq('barbeiro_id', barb.id);
     else if (filtro !== 'todos') query = query.eq('barbeiro_id', filtro);
@@ -844,7 +851,13 @@ function App() {
       const lista = (a.agendamento_servicos || []).map((r) => r.servicos).filter(Boolean);
       const nomes = lista.length > 0 ? lista.map((s) => s.nome).join(' + ') : a.servicos?.nome;
       const total = lista.length > 0 ? lista.reduce((soma, s) => soma + Number(s.preco || 0), 0) : Number(a.servicos?.preco || 0);
-      return { ...a, servicosNomes: nomes, servicosTotal: total };
+      // duração efetiva: nunca menor que a soma das durações dos serviços (conserta dados antigos com duracao_min defasado)
+      const durServicos = lista.length > 0
+        ? lista.reduce((soma, s) => soma + Number(s.duracao_min || 0), 0)
+        : Number(a.servicos?.duracao_min || 0);
+      const durArredondada = durServicos > 0 ? Math.ceil(durServicos / 15) * 15 : 0;
+      const duracaoEfetiva = Math.max(Number(a.duracao_min || 0), durArredondada, 15);
+      return { ...a, servicosNomes: nomes, servicosTotal: total, duracao_min: duracaoEfetiva };
     });
     const { data: bloqs } = await supabase.from('dias_bloqueados').select('id, barbeiro_id, motivo').eq('data', dataISO);
     const { data: hdia } = await supabase.from('horarios_dia').select('barbeiro_id, hora_inicio, hora_fim').eq('data', dataISO);
@@ -1217,14 +1230,18 @@ function App() {
     const gradeDia = gradeDoDia(dataObj, nomeDoBarbeiro(barbId));
     const listaDia = (gradeDia.periodos || []).flat();
     // agendamentos do mesmo barbeiro no dia (menos o próprio, que vai ser cancelado)
-    let query = supabase.from('agendamentos').select('id, horario, barbeiro_id, duracao_min').eq('data', dataISO).neq('status', 'cancelado');
+    let query = supabase.from('agendamentos').select('id, horario, barbeiro_id, duracao_min, servicos(duracao_min), agendamento_servicos(servicos(duracao_min))').eq('data', dataISO).neq('status', 'cancelado');
     if (barbId) query = query.eq('barbeiro_id', barbId);
     const { data: ags } = await query;
     let ocup = [];
     (ags || []).forEach((o) => {
       if (o.id === a.id) return; // ignora o próprio agendamento
       const ini = o.horario.slice(0, 5);
-      const slots = Math.max(1, Math.ceil((o.duracao_min || 15) / 15));
+      const listaServ = (o.agendamento_servicos || []).map((r) => r.servicos).filter(Boolean);
+      const durServ = listaServ.length > 0 ? listaServ.reduce((s, x) => s + Number(x.duracao_min || 0), 0) : Number(o.servicos?.duracao_min || 0);
+      const durArr = durServ > 0 ? Math.ceil(durServ / 15) * 15 : 0;
+      const duracaoEfetiva = Math.max(Number(o.duracao_min || 0), durArr, 15);
+      const slots = Math.max(1, Math.ceil(duracaoEfetiva / 15));
       const idx = listaDia.indexOf(ini);
       if (idx === -1) { ocup.push(ini); return; }
       for (let k = 0; k < slots; k++) if (listaDia[idx + k]) ocup.push(listaDia[idx + k]);
